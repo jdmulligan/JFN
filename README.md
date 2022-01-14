@@ -45,7 +45,7 @@ These steps use a common config file at `JFN/config/qg.yaml`.
 2. Fit model and make plots:
    ```
    cd JFN/analysis
-   python analyze_qg.py -c <config> -o <output_dir>
+   python analysis/analyze_qg.py -c <config> -o <output_dir>
    ```
    The `-o` path should point to the directory containing `subjets_unshuffled.h5` from Step 1. This is the location that the output plots will be written to. 
 
