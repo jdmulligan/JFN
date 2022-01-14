@@ -1,0 +1,115 @@
+# Config file for q vs g jet classification
+
+#------------------------------------------------------------------
+# These parameters are used in the processing script
+#------------------------------------------------------------------
+
+# Some parameters of the q-g dataset
+R: 0.4
+pt: [500., 550.]
+y_max: 1.7
+
+# Size of q-g labeled data to load
+n_max: 2100
+
+# Nsubjettiness basis
+K_max: 10
+
+# Subjet basis...
+N_max: 20
+r: [0.01, 0.05, 0.1, 0.2]
+
+#------------------------------------------------------------------
+# These parameters are used only in ML analysis
+#------------------------------------------------------------------
+
+# Size of q-g labeled data to load
+n_train: 1500
+n_val: 300
+n_test: 300
+
+# Classification labels
+q_label: 'quark'                                    # label 1
+g_label: 'gluon'                                    # label 0
+
+# Define Nsubjettiness observable basis sets to train models
+# The K-body phase space is (3K-4)-dimensional
+K: [2,4,6,8,10]
+
+# Select model: pfn, efn, subjet_linear, subjet_dnn, nsub_linear, nsub_dnn
+models: [nsubjettiness_linear]
+
+pfn:
+
+    # Network architecture parameters
+    Phi_sizes: [100, 100, 256]
+    F_sizes: [100, 100, 100]
+
+    # Network training parameters
+    epochs: 10
+    batch_size: 500
+    use_pids: True                                  # Use PID information (this option is currently ignored)
+    
+efn:
+
+    # Network architecture parameters
+    Phi_sizes: [100, 100, 256]
+    F_sizes: [100, 100, 100]
+
+    # Network training parameters
+    learning_rate: 0.001
+    epochs: 10
+    batch_size: 500
+
+subjet_dnn:
+
+    # Model hyperparameters
+    learning_rate: [1., 0.1, 0.01, 1.e-3, 1.e-4]    # (0.0001 cf 1810.05165)
+    loss: 'binary_crossentropy'                     # loss function - use categorical_crossentropy instead ?
+    metrics: ['accuracy']                           # measure accuracy during training
+    batch_size: 1000                    
+    epochs: 30                                      # number of training epochs
+    
+subjet_linear:
+
+    # Model hyperparameters -- SGDClassifier
+    sgd_loss: 'hinge'                               # cost function
+    sgd_penalty: ['l2', 'l1']                       # regularization term
+    sgd_alpha: [1e-5, 1e-4, 1e-3]                   # regularization strength
+    sgd_max_iter: 1000                              # max number of epochs
+    sgd_tol: [1e-5, 1e-4, 1e-3]                     # criteria to stop training
+    sgd_learning_rate: 'optimal'                    # learning schedule (learning rate decreases over time in proportion to alpha)
+    sgd_early_stopping: False                       # whether to stop training based on validation score
+
+    lda_tol: [1e-6, 1e-5, 1e-4, 1e-3, 5e-3, 1e-2]   # criteria to stop training
+
+    # Hyperparameter tuning
+    n_iter: 10                                      # number of random hyperparameter sets to try
+    cv: 5                                           # number of cross-validation folds
+    
+nsub_dnn:
+
+    # Model hyperparameters
+    learning_rate: [1., 0.1, 0.01, 1.e-3, 1.e-4]    # (0.0001 cf 1810.05165)
+    loss: 'binary_crossentropy'                     # loss function - use categorical_crossentropy instead ?
+    metrics: ['accuracy']                           # measure accuracy during training
+    batch_size: 1000                    
+    epochs: 30                                      # number of training epochs
+    
+nsub_linear:
+
+    # Model hyperparameters -- SGDClassifier
+    sgd_loss: 'hinge'                               # cost function
+    sgd_penalty: ['l2', 'l1']                       # regularization term
+    sgd_alpha: [1e-5, 1e-4, 1e-3]                   # regularization strength
+    sgd_max_iter: 1000                              # max number of epochs
+    sgd_tol: [1e-5, 1e-4, 1e-3]                     # criteria to stop training
+    sgd_learning_rate: 'optimal'                    # learning schedule (learning rate decreases over time in proportion to alpha)
+    sgd_early_stopping: False                       # whether to stop training based on validation score
+
+    lda_tol: [1e-6, 1e-5, 1e-4, 1e-3, 5e-3, 1e-2]   # criteria to stop training
+
+    # Hyperparameter tuning
+    n_iter: 10                                      # number of random hyperparameter sets to try
+    cv: 5                                           # number of cross-validation folds
+    
