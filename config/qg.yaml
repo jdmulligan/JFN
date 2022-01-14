@@ -37,7 +37,7 @@ g_label: 'gluon'                                    # label 0
 K: [2,4,6,8,10]
 
 # Select model: pfn, efn, subjet_linear, subjet_dnn, nsub_linear, nsub_dnn
-models: [nsubjettiness_linear]
+models: [pfn, efn, nsub_dnn, nsub_linear]
 
 pfn:
 
