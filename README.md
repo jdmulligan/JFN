@@ -1,6 +1,10 @@
 # JFN
 
 ## Setup software environment – on hiccup cluster
+Logon to hiccup:
+```
+ssh <user>@hic.lbl.gov
+```
 
 First, request an interactive node from the slurm batch system:
    ```
