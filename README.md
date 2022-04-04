@@ -15,18 +15,18 @@ Depending how busy the squeue is, you may get the node instantly, or you may hav
 When you’re done with your session, just type `exit`.
 Please do not run anything bust the lightest tests on the login node. If you are finding that you have to wait a long time, let us know and we can take a node out of the slurm queue and logon to it directly.
 
+Load some modules that we will need:
+```
+module use /software/users/james/heppy/modules
+module load heppy/1.0
+module list
+```
+
 Then initialize a python environment with the packages listed in Pipfile:
 ```
 cd JFN
 pipenv install         # (this step is only needed the first time)
 pipenv shell
-```
-
-Finally, load some modules that we will need
-```
-module use /software/users/james/heppy/modules
-module load heppy/1.0
-module list
 ```
 
 Now we are ready to run our scripts.
