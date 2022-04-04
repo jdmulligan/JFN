@@ -10,6 +10,7 @@ import argparse
 import yaml
 import h5py
 import time
+from collections import defaultdict
 
 # Data analysis and plotting
 import pandas as pd
@@ -74,6 +75,13 @@ class ProcessQG(common_base.CommonBase):
           
         # Nsubjettiness basis
         self.K = config['K_max']
+        self.N_list = []
+        self.beta_list = []
+        for i in range(self.K-2):
+            self.N_list += [i+1] * 3
+            self.beta_list += [0.5,1,2]
+        self.N_list += [self.K-1] * 2  
+        self.beta_list += [1,2]
 
         # Subjet basis
         self.N_max = config['N_max']
@@ -84,33 +92,8 @@ class ProcessQG(common_base.CommonBase):
     #---------------------------------------------------------------
     def initialize_data_structures(self):
 
-        # Construct dictionary to store all jet quantities of interest
-        self.jet_qa_variables = {}
-        self.four_vectors = {}
-        self.nsub_variables = {}
-        self.subjet_variables = {}
-
-        # Nsubjettiness basis -- create list of N-subjettiness observables: number of axes and beta values
-        self.N_list = []
-        self.beta_list = []
-        for i in range(self.K-2):
-            self.N_list += [i+1] * 3
-            self.beta_list += [0.5,1,2]
-        self.N_list += [self.K-1] * 2  
-        self.beta_list += [1,2]
-        for i,N in enumerate(self.N_list):
-            beta = self.beta_list[i]
-            self.nsub_variables[f'n_subjettiness_N{N}_beta{beta}'] = []
-
-        # Subjet basis -- list of subjet radii
-        for r in self.r_list:
-            for N in range(self.N_max):
-                self.subjet_variables[f'subjet_r{r}_N{N}'] = []
-
-        # Store some other jet observables for our reference
-        self.qa_observables = ['jet_pt', 'jet_angularity', 'thrust', 'LHA', 'pTD', 'jet_mass', 'jet_theta_g', 'zg', 'multiplicity_0000', 'multiplicity_0150', 'multiplicity_0500', 'multiplicity_1000']
-        for qa_observable in self.qa_observables:
-            self.jet_qa_variables[qa_observable] = []
+        # Create two-layer nested defaultdict of lists to store jet observables
+        self.output = defaultdict(lambda: defaultdict(list))
 
     #---------------------------------------------------------------
     # Load qg data set 
@@ -162,38 +145,38 @@ class ProcessQG(common_base.CommonBase):
         # Loop over events and do jet finding
         # Fill each of the jet_variables into a list
         fj.ClusterSequence.print_banner()
-        print('Finding jets and computing N-subjettiness...')
-        result = [self.analyze_event(fj_particles) for fj_particles in self.df_fjparticles]        
+        print('Finding jets and computing N-subjettiness and subjets...')
+        result = [self.analyze_event(fj_particles) for fj_particles in self.df_fjparticles]
         
         # Transform the dictionary of lists into a dictionary of numpy arrays
-        self.nsub_variables_numpy = self.transform_to_numpy(self.nsub_variables)
-        self.subjet_variables_numpy = self.transform_to_numpy(self.subjet_variables)
-        self.jet_qa_variables_numpy = self.transform_to_numpy(self.jet_qa_variables)
+        self.output_numpy = {}
+        for key,value in self.output.items():
+            self.output_numpy[key] = self.transform_to_numpy(value)
         
         # Reformat output for ML algorithms (array with 1 array per jet which contain all N-subjettiness values)
-        X_Nsub = np.array([list(self.nsub_variables_numpy.values())])[0].T
-        X_subjet = np.array([list(self.subjet_variables_numpy.values())])[0].T
+        self.output_final = {}
+        self.output_final['nsub'] = np.array([list(self.output_numpy['nsub'].values())])[0].T
+        for key,val in self.output_numpy['subjet'].items():
+            self.output_final[f'subjet_{key}'] = val
 
         # Write jet arrays to file
         with h5py.File(os.path.join(self.output_dir, 'subjets_unshuffled.h5'), 'w') as hf:
-        
-            # Write Nsubjettiness
-            hf.create_dataset(f'X_Nsub', data=X_Nsub)
-            hf.create_dataset(f'X_subjet', data=X_subjet)
-
-            # Check whether any training entries are empty
-            [print(f'WARNING: input entry {i} is empty') for i,x in enumerate(X_Nsub) if not x.any()]
-            [print(f'WARNING: input entry {i} is empty') for i,x in enumerate(X_subjet) if not x.any()]
+            print('-------------------------------------')
 
             # Write labels: gluon 0, quark 1
             hf.create_dataset(f'y', data=self.y)
-            print('-------------------------------------')
             print(f'labels: {self.y.shape}')
-            print(f'X_Nsub: {X_Nsub.shape}')
-            print(f'X_subjet: {X_subjet.shape}')
 
-            for qa_observable in self.qa_observables:
-                hf.create_dataset(f'{qa_observable}', data=self.jet_qa_variables_numpy[qa_observable])
+            # Write numpy arrays
+            for key,val in self.output_final.items():
+                hf.create_dataset(key, data=val)
+                print(f'{key}: {val.shape}')
+
+                # Check whether any training entries are empty
+                [print(f'WARNING: input entry {i} is empty') for i,x in enumerate(val) if not x.any()]
+
+            for qa_observable in self.output['qa']:
+                hf.create_dataset(f'{qa_observable}', data=self.output_numpy['qa'][qa_observable])
 
             # Make some QA plots
             self.plot_QA()
@@ -249,7 +232,7 @@ class ProcessQG(common_base.CommonBase):
             measure_definition = fjcontrib.UnnormalizedMeasure(beta)
             n_subjettiness_calculator = fjcontrib.Nsubjettiness(N, axis_definition, measure_definition)
             n_subjettiness = n_subjettiness_calculator.result(jet)/jet.pt()
-            self.nsub_variables[f'n_subjettiness_N{N}_beta{beta}'].append(n_subjettiness)
+            self.output['nsub'][f'N{N}_beta{beta}'].append(n_subjettiness)
 
     #---------------------------------------------------------------
     # Compute subjet kinematics...
@@ -262,12 +245,44 @@ class ProcessQG(common_base.CommonBase):
             cs_subjet = fj.ClusterSequence(jet.constituents(), subjet_def)
             subjets = fj.sorted_by_pt(cs_subjet.inclusive_jets())
 
+            # Construct a Laman graph for each jet, and save the edges (node connections) and angles
+            edge_list = []
+            angle_list = []
+            z_list = []
             for N in range(self.N_max):
+
+                # First, fill the z values of the node
                 if N < len(subjets):
                     z = subjets[N].pt() / jet.pt()
+                    z_list.append(z)
                 else:
-                    z = 0
-                self.subjet_variables[f'subjet_r{r}_N{N}'].append(z)
+                    z_list.append(0)
+
+                # Henneberg construction using Type 1 connections
+                # To start, let's just build based on pt ordering
+                # A simple construction is to have each node N connected to nodes N+1,N+2
+                # We will also zero-pad for now (edges denoted [-1,-1]) to keep fixed-size arrays
+                if N < self.N_max-1:
+                    if N < len(subjets)-1:
+                        angle = subjets[N].delta_R(subjets[N+1])
+                        edge_list.append(np.array([N, N+1]))
+                        angle_list.append(angle)
+                    else:
+                        edge_list.append(np.array([-1, -1]))
+                        angle_list.append(0)   
+
+                if N < self.N_max-2:
+                    if N < len(subjets)-2:
+                        angle = subjets[N].delta_R(subjets[N+2])
+                        edge_list.append(np.array([N, N+2]))
+                        angle_list.append(angle) 
+                    else:
+                        edge_list.append(np.array([-1, -1]))
+                        angle_list.append(0)
+            
+            self.output[f'subjet'][f'r{r}_edges'].append(np.array(edge_list))
+            self.output[f'subjet'][f'r{r}_angles'].append(np.array(angle_list))
+            self.output[f'subjet'][f'r{r}_z'].append(np.array(z_list))
 
     #---------------------------------------------------------------
     # Analyze jets of a given event.
@@ -275,34 +290,34 @@ class ProcessQG(common_base.CommonBase):
     def fill_qa(self, jet):
 
         # Fill some jet QA
-        self.jet_qa_variables['jet_pt'].append(jet.pt())
+        self.output['qa']['jet_pt'].append(jet.pt())
         
         # angularity
         alpha = 1
         kappa = 1
         angularity = fjext.lambda_beta_kappa(jet, alpha, kappa, self.R)
-        self.jet_qa_variables['jet_angularity'].append(angularity)
+        self.output['qa']['jet_angularity'].append(angularity)
 
         # thrust
         alpha = 2
         kappa = 1
         angularity = fjext.lambda_beta_kappa(jet, alpha, kappa, self.R)
-        self.jet_qa_variables['thrust'].append(angularity)
+        self.output['qa']['thrust'].append(angularity)
 
         # LHA
         alpha = 0.5
         kappa = 1
         angularity = fjext.lambda_beta_kappa(jet, alpha, kappa, self.R)
-        self.jet_qa_variables['LHA'].append(angularity)
+        self.output['qa']['LHA'].append(angularity)
 
         # pTD
         alpha = 0
         kappa = 2
         angularity = fjext.lambda_beta_kappa(jet, alpha, kappa, self.R)
-        self.jet_qa_variables['pTD'].append(angularity)
+        self.output['qa']['pTD'].append(angularity)
         
         # mass
-        self.jet_qa_variables['jet_mass'].append(jet.m())
+        self.output['qa']['jet_mass'].append(jet.m())
         
         # theta_g
         beta = 0
@@ -310,15 +325,15 @@ class ProcessQG(common_base.CommonBase):
         gshop = fjcontrib.GroomerShop(jet, self.R, fj.cambridge_algorithm)
         jet_groomed_lund = gshop.soft_drop(beta, zcut, self.R)
         theta_g = jet_groomed_lund.Delta() / self.R
-        self.jet_qa_variables['jet_theta_g'].append(theta_g)
+        self.output['qa']['jet_theta_g'].append(theta_g)
 
         # zg
         zg = jet_groomed_lund.z()
-        self.jet_qa_variables['zg'].append(zg)
+        self.output['qa']['zg'].append(zg)
         
         # multiplicity
         n_constituents = len(jet.constituents())
-        self.jet_qa_variables['multiplicity_0000'].append(n_constituents)
+        self.output['qa']['multiplicity_0000'].append(n_constituents)
         multiplicity_0150 = 0
         multiplicity_0500 = 0
         multiplicity_1000 = 0
@@ -329,9 +344,9 @@ class ProcessQG(common_base.CommonBase):
                 multiplicity_0500 += 1
             if constituent.pt() > 1.:
                 multiplicity_1000 += 1
-        self.jet_qa_variables['multiplicity_0150'].append(multiplicity_0150)
-        self.jet_qa_variables['multiplicity_0500'].append(multiplicity_0500)
-        self.jet_qa_variables['multiplicity_1000'].append(multiplicity_1000)
+        self.output['qa']['multiplicity_0150'].append(multiplicity_0150)
+        self.output['qa']['multiplicity_0500'].append(multiplicity_0500)
+        self.output['qa']['multiplicity_1000'].append(multiplicity_1000)
         
     #---------------------------------------------------------------
     # Transform dictionary of lists into a dictionary of numpy arrays
@@ -349,9 +364,9 @@ class ProcessQG(common_base.CommonBase):
     #---------------------------------------------------------------
     def plot_QA(self):
     
-        for qa_observable in self.qa_observables:
+        for qa_observable in self.output_numpy['qa'].keys():
             
-            qa_result = self.jet_qa_variables_numpy[qa_observable]
+            qa_result = self.output_numpy['qa'][qa_observable]
             qa_observable_shape = qa_result.shape
             if qa_observable_shape[0] == 0:
                 continue
