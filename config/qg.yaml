@@ -7,17 +7,20 @@
 # Some parameters of the q-g dataset
 R: 0.4
 pt: [500., 550.]
-y_max: 1.7
+y_max: 1.701
 
 # Size of q-g labeled data to load
 n_max: 2100
 
 # Nsubjettiness basis
-K_max: 10
+K_max: 8
 
 # Subjet basis...
-N_max: 20
-r: [0.01, 0.05, 0.1]
+N_max: 8
+r: [0.001, 0.005, 0.01, 0.05, 0.1]
+
+# Momentum Normalization of Subjets
+Mom_norm: False 
 
 #------------------------------------------------------------------
 # These parameters are used only in ML analysis
@@ -34,10 +37,10 @@ g_label: 'gluon'                                    # label 0
 
 # Define Nsubjettiness observable basis sets to train models
 # The K-body phase space is (3K-4)-dimensional
-K: [2,4,6,8,10]
+K: [2,4,6,8]
 
 # Select model: pfn, efn, subjet_linear, subjet_dnn, nsub_linear, nsub_dnn
-models: [pfn, efn, nsub_dnn, nsub_linear]
+models: [pfn, efn, sub_dnn, nsub_dnn, nsub_linear,laman_dnn,laman_linear]
 
 pfn:
 
@@ -60,6 +63,16 @@ efn:
     learning_rate: 0.001
     epochs: 10
     batch_size: 500
+
+sub_dnn:
+
+    # Model hyperparameters
+    learning_rate: [1., 0.1, 0.01, 1.e-3, 1.e-4]    # (0.0001 cf 1810.05165)
+    loss: 'binary_crossentropy'                     # loss function - use categorical_crossentropy instead ?
+    metrics: ['accuracy']                           # measure accuracy during training
+    batch_size: 1000                    
+    epochs: 30                                      # number of training epochs
+  
 
 subjet_dnn:
 
@@ -112,4 +125,30 @@ nsub_linear:
     # Hyperparameter tuning
     n_iter: 10                                      # number of random hyperparameter sets to try
     cv: 5                                           # number of cross-validation folds
+
+laman_dnn:
+
+    # Model hyperparameters
+    learning_rate: [1., 0.1, 0.01, 1.e-3, 1.e-4]    # (0.0001 cf 1810.05165)
+    loss: 'binary_crossentropy'                     # loss function - use categorical_crossentropy instead ?
+    metrics: ['accuracy']                           # measure accuracy during training
+    batch_size: 1000                    
+    epochs: 30                                      # number of training epochs
     
+laman_linear:
+
+    # Model hyperparameters -- SGDClassifier
+    sgd_loss: 'hinge'                               # cost function
+    sgd_penalty: ['l2', 'l1']                       # regularization term
+    sgd_alpha: [1e-5, 1e-4, 1e-3]                   # regularization strength
+    sgd_max_iter: 1000                              # max number of epochs
+    sgd_tol: [1e-5, 1e-4, 1e-3]                     # criteria to stop training
+    sgd_learning_rate: 'optimal'                    # learning schedule (learning rate decreases over time in proportion to alpha)
+    sgd_early_stopping: False                       # whether to stop training based on validation score
+
+    lda_tol: [1e-6, 1e-5, 1e-4, 1e-3, 5e-3, 1e-2]   # criteria to stop training
+
+    # Hyperparameter tuning
+    n_iter: 10                                      # number of random hyperparameter sets to try
+    cv: 5                                           # number of cross-validation folds
+        

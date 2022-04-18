@@ -54,7 +54,7 @@ class ProcessQG(common_base.CommonBase):
         # Load quark-gluon dataset
         self.load_qg_dataset()
      
-        print(self)
+        #print(self)
         print()
 
     #---------------------------------------------------------------
@@ -69,6 +69,8 @@ class ProcessQG(common_base.CommonBase):
         self.R = config['R']
         self.pt = config['pt']
         self.y_max = config['y_max']
+
+        self.Mom_norm = config['Mom_norm']
 
         self.n_total = config['n_max']
         self.event_index = 0
@@ -158,6 +160,7 @@ class ProcessQG(common_base.CommonBase):
         self.output_final['nsub'] = np.array([list(self.output_numpy['nsub'].values())])[0].T
         for key,val in self.output_numpy['subjet'].items():
             self.output_final[f'subjet_{key}'] = val
+            print(key)
 
         # Write jet arrays to file
         with h5py.File(os.path.join(self.output_dir, 'subjets_unshuffled.h5'), 'w') as hf:
@@ -166,25 +169,26 @@ class ProcessQG(common_base.CommonBase):
             # Write labels: gluon 0, quark 1
             hf.create_dataset(f'y', data=self.y)
             print(f'labels: {self.y.shape}')
+            
 
             # Write numpy arrays
             for key,val in self.output_final.items():
                 hf.create_dataset(key, data=val)
                 print(f'{key}: {val.shape}')
-
                 # Check whether any training entries are empty
                 [print(f'WARNING: input entry {i} is empty') for i,x in enumerate(val) if not x.any()]
 
             for qa_observable in self.output['qa']:
                 hf.create_dataset(f'{qa_observable}', data=self.output_numpy['qa'][qa_observable])
-
+                print(f'{qa_observable}')
             # Make some QA plots
             self.plot_QA()
 
             hf.create_dataset('N_list', data=self.N_list)
             hf.create_dataset('beta_list', data=self.beta_list)
             hf.create_dataset('r_list', data=self.r_list)
-                            
+
+
     #---------------------------------------------------------------
     # Process an event
     #---------------------------------------------------------------
@@ -238,7 +242,7 @@ class ProcessQG(common_base.CommonBase):
     # Compute subjet kinematics...
     #---------------------------------------------------------------
     def fill_subjets(self, jet):
-
+        
         for r in self.r_list:
 
             subjet_def = fj.JetDefinition(fj.antikt_algorithm, r)
@@ -248,30 +252,41 @@ class ProcessQG(common_base.CommonBase):
             # Construct a Laman graph for each jet, and save the edges (node connections) and angles
             edge_list = []
             angle_list = []
+            subjet_angle_list=[]
+            subjet_rap_list=[]
             z_list = []
-            for N in range(self.N_max):
+            for N in range(self.N_max): #the max number of N is N_max-1 because we start from 0
 
-                # First, fill the z values of the node
+                # First, fill the z values of the node + (η,φ) for the subjets
                 if N < len(subjets):
                     z = subjets[N].pt() / jet.pt()
                     z_list.append(z)
+                    subjet_angle = subjets[N].phi()
+                    subjet_rap = subjets[N].rap()
+                    subjet_angle_list.append(subjet_angle)
+                    subjet_rap_list.append(subjet_rap)
                 else:
                     z_list.append(0)
+                    subjet_angle_list.append(0)
+                    subjet_rap_list.append(0)
+                
+                
 
                 # Henneberg construction using Type 1 connections
                 # To start, let's just build based on pt ordering
                 # A simple construction is to have each node N connected to nodes N+1,N+2
                 # We will also zero-pad for now (edges denoted [-1,-1]) to keep fixed-size arrays
-                if N < self.N_max-1:
-                    if N < len(subjets)-1:
+                
+                if N < self.N_max-1: 
+                    if N < len(subjets)-1: 
                         angle = subjets[N].delta_R(subjets[N+1])
-                        edge_list.append(np.array([N, N+1]))
+                        edge_list.append(np.array([N, N+1])) #in order to know to which pair the angle's list entry corresponds to 
                         angle_list.append(angle)
                     else:
                         edge_list.append(np.array([-1, -1]))
-                        angle_list.append(0)   
+                        angle_list.append(0)
 
-                if N < self.N_max-2:
+                if N < self.N_max-2: 
                     if N < len(subjets)-2:
                         angle = subjets[N].delta_R(subjets[N+2])
                         edge_list.append(np.array([N, N+2]))
@@ -280,10 +295,19 @@ class ProcessQG(common_base.CommonBase):
                         edge_list.append(np.array([-1, -1]))
                         angle_list.append(0)
             
+            if self.Mom_norm == True:
+                for N in range(self.N_max):
+                    z_list[N] = np.array(z_list[N])/sum(np.array(z_list))
+
+
             self.output[f'subjet'][f'r{r}_edges'].append(np.array(edge_list))
             self.output[f'subjet'][f'r{r}_angles'].append(np.array(angle_list))
             self.output[f'subjet'][f'r{r}_z'].append(np.array(z_list))
-
+            self.output[f'subjet'][f'r{r}_sub_angles'].append(np.array(subjet_angle_list))
+            self.output[f'subjet'][f'r{r}_sub_rap'].append(np.array(subjet_rap_list))
+                
+        
+        
     #---------------------------------------------------------------
     # Analyze jets of a given event.
     #---------------------------------------------------------------
