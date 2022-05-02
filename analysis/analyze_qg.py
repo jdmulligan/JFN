@@ -63,6 +63,11 @@ class AnalyzeQG(common_base.CommonBase):
             self.N_list = hf['N_list'][:]
             self.beta_list = hf['beta_list'][:]
             self.r_list = hf['r_list'][:]
+            self.N_max_hf = hf['N_max'] 
+            self.n_total_hf = hf['n_total']
+            self.Clustering_Alg = hf['Clustering_Alg']
+            self.Laman_construction = hf['Laman_construction']
+
 
         self.qa_observables = ['jet_pt', 'jet_angularity', 'thrust', 'LHA', 'pTD', 'jet_mass', 'jet_theta_g', 'zg', 'multiplicity_0000', 'multiplicity_0150', 'multiplicity_0500', 'multiplicity_1000']
             
@@ -88,7 +93,7 @@ class AnalyzeQG(common_base.CommonBase):
           
         self.K_list = config['K']
         self.N_max = config['N_max']
-        self.r_list = config['r']
+        self.r_list = config['r'] #this is not necessary since the r_list is read from the output dir in the __init__
 
         self.q_label = config['q_label']
         self.g_label = config['g_label']
@@ -102,8 +107,12 @@ class AnalyzeQG(common_base.CommonBase):
 
         self.random_state = None  # seed for shuffling data (set to an int to have reproducible results)
         
-        #Momentum Normalization of Subjets
-        self.Mom_norm = config['Mom_norm']
+        # Clustering Algorithm 
+        self.Clustering_Alg = config['Clustering_Alg']
+
+        #Laman Construction
+        self.Laman_construction = config['Laman_construction']
+
 
         # Initialize model-specific settings
         self.config = config
@@ -137,6 +146,13 @@ class AnalyzeQG(common_base.CommonBase):
                 self.model_settings[model]['epochs'] = config[model]['epochs']
                 self.model_settings[model]['batch_size'] = config[model]['batch_size']
                 self.model_settings[model]['use_pids'] = config[model]['use_pids']
+            
+            if model == 'sub_pfn':
+                self.model_settings[model]['Phi_sizes'] = tuple(config[model]['Phi_sizes'])
+                self.model_settings[model]['F_sizes'] = tuple(config[model]['F_sizes'])
+                self.model_settings[model]['epochs'] = config[model]['epochs']
+                self.model_settings[model]['batch_size'] = config[model]['batch_size']
+                self.model_settings[model]['use_pids'] = config[model]['use_pids']
                 
             if model == 'efn':
                 self.model_settings[model]['Phi_sizes'] = tuple(config[model]['Phi_sizes'])
@@ -152,9 +168,10 @@ class AnalyzeQG(common_base.CommonBase):
     
         # Clear variables
         self.AUC = {}
+        self.units = {} # To save the hidden layers' size that keras.tuner calculated
+        self.epochs = {} # If we use early stopping we need to know how many epochs were run
         self.y = None
         self.X_Nsub = None
-        
 
         # Read in dataset
         with h5py.File(os.path.join(self.output_dir, self.filename), 'r') as hf:
@@ -168,7 +185,7 @@ class AnalyzeQG(common_base.CommonBase):
                 self.subjet_input_total[f'subjet_r{r}_edges'] = hf[f'subjet_r{r}_edges'][:]
                 self.subjet_input_total[f'subjet_r{r}_angles'] = hf[f'subjet_r{r}_angles'][:]
                 self.subjet_input_total[f'subjet_r{r}_z'] = hf[f'subjet_r{r}_z'][:]
-                self.subjet_input_total[f'subjet_r{r}_sub_angles'] = hf[f'subjet_r{r}_sub_angles'][:]
+                self.subjet_input_total[f'subjet_r{r}_sub_phi'] = hf[f'subjet_r{r}_sub_phi'][:]
                 self.subjet_input_total[f'subjet_r{r}_sub_rap'] = hf[f'subjet_r{r}_sub_rap'][:]
                 
 
@@ -189,14 +206,13 @@ class AnalyzeQG(common_base.CommonBase):
                 indices_to_remove = np.where( np.isclose(self.y_total,0) )[0][total_jets_q:]
             y_balanced = np.delete(self.y_total, indices_to_remove)
             X_Nsub_balanced = np.delete(X_Nsub_total, indices_to_remove, axis=0)
-            #X_subjet_balanced = np.delete(X_subjet_total, indices_to_remove, axis=0)
 
             self.subjet_input_balanced={}
             for r in self.r_list:
                 self.subjet_input_balanced[f'subjet_r{r}_edges'] = np.delete(self.subjet_input_total[f'subjet_r{r}_edges'], indices_to_remove, axis=0) 
                 self.subjet_input_balanced[f'subjet_r{r}_angles'] = np.delete(self.subjet_input_total[f'subjet_r{r}_angles'], indices_to_remove, axis=0) 
                 self.subjet_input_balanced[f'subjet_r{r}_z'] = np.delete(self.subjet_input_total[f'subjet_r{r}_z'], indices_to_remove, axis=0) 
-                self.subjet_input_balanced[f'subjet_r{r}_sub_angles'] = np.delete(self.subjet_input_total[f'subjet_r{r}_sub_angles'], indices_to_remove, axis=0) 
+                self.subjet_input_balanced[f'subjet_r{r}_sub_phi'] = np.delete(self.subjet_input_total[f'subjet_r{r}_sub_phi'], indices_to_remove, axis=0) 
                 self.subjet_input_balanced[f'subjet_r{r}_sub_rap'] = np.delete(self.subjet_input_total[f'subjet_r{r}_sub_rap'], indices_to_remove, axis=0) 
 
 
@@ -210,14 +226,14 @@ class AnalyzeQG(common_base.CommonBase):
             if y_balanced.shape[0] == idx.shape[0]:
                 y_shuffled = y_balanced[idx]
                 X_Nsub_shuffled = X_Nsub_balanced[idx]
-                #X_subjet_shuffled = X_subjet_balanced[idx]
+
 
                 self.subjet_input_shuffled={}
                 for r in self.r_list:
                     self.subjet_input_shuffled[f'subjet_r{r}_edges'] = self.subjet_input_balanced[f'subjet_r{r}_edges'][idx]
                     self.subjet_input_shuffled[f'subjet_r{r}_angles'] = self.subjet_input_balanced[f'subjet_r{r}_angles'][idx]
-                    self.subjet_input_shuffled[f'subjet_r{r}_z'] =self.subjet_input_balanced[f'subjet_r{r}_z'][idx]
-                    self.subjet_input_shuffled[f'subjet_r{r}_sub_angles'] =self.subjet_input_balanced[f'subjet_r{r}_sub_angles'][idx]
+                    self.subjet_input_shuffled[f'subjet_r{r}_z'] = self.subjet_input_balanced[f'subjet_r{r}_z'][idx]
+                    self.subjet_input_shuffled[f'subjet_r{r}_sub_phi'] = self.subjet_input_balanced[f'subjet_r{r}_sub_phi'][idx]
                     self.subjet_input_shuffled[f'subjet_r{r}_sub_rap'] = self.subjet_input_balanced[f'subjet_r{r}_sub_rap'][idx]
 
 
@@ -233,8 +249,8 @@ class AnalyzeQG(common_base.CommonBase):
             for r in self.r_list:
                 self.subjet_input[f'subjet_r{r}_edges'] = self.subjet_input_shuffled[f'subjet_r{r}_edges'][:self.n_total]
                 self.subjet_input[f'subjet_r{r}_angles'] = self.subjet_input_shuffled[f'subjet_r{r}_angles'][:self.n_total]
-                self.subjet_input[f'subjet_r{r}_z'] =self.subjet_input_shuffled[f'subjet_r{r}_z'][:self.n_total]
-                self.subjet_input[f'subjet_r{r}_sub_angles'] =self.subjet_input_shuffled[f'subjet_r{r}_sub_angles'][:self.n_total]
+                self.subjet_input[f'subjet_r{r}_z'] = self.subjet_input_shuffled[f'subjet_r{r}_z'][:self.n_total]
+                self.subjet_input[f'subjet_r{r}_sub_phi'] = self.subjet_input_shuffled[f'subjet_r{r}_sub_phi'][:self.n_total]
                 self.subjet_input[f'subjet_r{r}_sub_rap'] = self.subjet_input_shuffled[f'subjet_r{r}_sub_rap'][:self.n_total]
  
 
@@ -276,18 +292,22 @@ class AnalyzeQG(common_base.CommonBase):
 
         # Train Laman DNN and Subjet DNN for different r
         for r in self.r_list:
+
+            # Split into Train and Test sets for Laman DNN
             self.X_laman_train[f'r{r}'],self.X_laman_test[f'r{r}'],self.y_laman_train[f'r{r}'],self.y_laman_test[f'r{r}'] =  sklearn.model_selection.train_test_split(np.concatenate((self.subjet_input[f'subjet_r{r}_z'], self.subjet_input[f'subjet_r{r}_angles']),axis=1), self.y, test_size=self.test_frac)
             
             # Use as input to the Sub DNN (pt_1, η_1, φ_1,...,pt_n, η_n, φ_n) instead of (pt_1,...,pt_n, η_1,...η_n, φ_1, ... , φ_n)
             self.x_subjet_combined = []
             for n in range(self.N_max):
                 self.x_subjet_combined.append(np.array(self.subjet_input[f'subjet_r{r}_z'][:,n]))
-                self.x_subjet_combined.append(np.array(self.subjet_input[f'subjet_r{r}_sub_angles'][:,n]))
+                self.x_subjet_combined.append(np.array(self.subjet_input[f'subjet_r{r}_sub_phi'][:,n]))
                 self.x_subjet_combined.append(np.array(self.subjet_input[f'subjet_r{r}_sub_rap'][:,n]))
 
-            # Τhe shape of self.x_subjet_combined is (3*N_max, N_total) instead of (N_tot , 3*N_max)
-            self.X_subjet_train[f'r{r}'],self.X_subjet_test[f'r{r}'],self.y_subjet_train[f'r{r}'],self.y_subjet_test[f'r{r}'] = sklearn.model_selection.train_test_split(np.array(self.x_subjet_combined).T, self.y, test_size=self.test_frac)
+            # Τhe shape of self.x_subjet_combined is (3*N_max, n_total) instead of (n_tot , 3*N_max)
+            self.x_subjet_combined = np.array(self.x_subjet_combined).T
             
+            # Split into Train and Test sets for Subjet DNN
+            self.X_subjet_train[f'r{r}'],self.X_subjet_test[f'r{r}'],self.y_subjet_train[f'r{r}'],self.y_subjet_test[f'r{r}'] = sklearn.model_selection.train_test_split(self.x_subjet_combined, self.y, test_size=self.test_frac)
 
 
         # Construct training/test sets for each K
@@ -326,7 +346,10 @@ class AnalyzeQG(common_base.CommonBase):
         print(f'r_list : {self.r_list}')
         print(f'K_list : {self.K_list}')
         print(f'N max : {self.N_max}')
-        print(f'Momentum Normalization : {self.Mom_norm}')
+        print(f'Layers: {self.units}' )
+        print(f'Epochs: {self.epochs}' )
+        print(f'Clustering Algorithm : {self.Clustering_Alg}')
+        print(f'Laman Construction : {self.Laman_construction}')
         print(f'AUC : {self.AUC}' )
         print(f'AUC Difference Laman - Sub : {self.diff}')
         
@@ -348,8 +371,8 @@ class AnalyzeQG(common_base.CommonBase):
 
             # Nsubjettiness  
             for K in self.K_list:
-                #if model == 'nsub_linear':
-                    #self.fit_nsub_linear(model, model_settings, K)
+                if model == 'nsub_linear':
+                    self.fit_nsub_linear(model, model_settings, K)
                 if model == 'nsub_dnn':
                     self.fit_nsub_dnn(model, model_settings, K)
 
@@ -368,7 +391,9 @@ class AnalyzeQG(common_base.CommonBase):
                 # Subjet DNN based on pt ordering 
                 if model == 'sub_dnn':
                     self.fit_subjet_dnn(model, model_settings,r)
-
+                # Subjet PFN 
+                if model == 'sub_pfn':
+                    self.fit_sub_pfn(model, model_settings,r)
             
 
 
@@ -377,7 +402,7 @@ class AnalyzeQG(common_base.CommonBase):
             self.roc_curve_dict[observable] = sklearn.metrics.roc_curve(self.y_total[:self.n_total], -self.qa_results[observable])
 
         # Save ROC curves to file
-        if 'nsub_dnn' in self.models or 'subjet_dnn' in self.models or 'nsub_linear' in self.models or 'subjet_linear' in self.models or 'pfn' in self.models or 'efn' in self.models:
+        if 'nsub_dnn' in self.models or 'sub_dnn' in self.models or 'laman_dnn' in self.models  or 'nsub_linear' in self.models  or 'pfn' in self.models or 'sub_pfn' in self.models or 'efn' in self.models:
             output_filename = os.path.join(self.output_dir, f'ROC.pkl')
             with open(output_filename, 'wb') as f:
                 pickle.dump(self.roc_curve_dict, f)
@@ -392,6 +417,7 @@ class AnalyzeQG(common_base.CommonBase):
         X_test = self.training_data[K]['X_Nsub_test']
         y_train = self.y_train
         y_test = self.y_test
+
         self.fit_linear_model(X_train, y_train, X_test, y_test, model, model_settings, dim_label='K', dim=K, type='LDA_search')
 
     #---------------------------------------------------------------
@@ -414,7 +440,7 @@ class AnalyzeQG(common_base.CommonBase):
         X_laman_train = sklearn.preprocessing.scale(self.X_laman_train[f'r{r}'])
         X_laman_test = sklearn.preprocessing.scale(self.X_laman_test[f'r{r}'])
 
-        self.fit_dnn_laman(X_laman_train, self.y_laman_train[f'r{r}'], X_laman_test, self.y_laman_test[f'r{r}'], model, model_settings,r) 
+        self.fit_dnn_subjet(X_laman_train, self.y_laman_train[f'r{r}'], X_laman_test, self.y_laman_test[f'r{r}'], model, model_settings,r) 
   
 
     #---------------------------------------------------------------
@@ -569,59 +595,9 @@ class AnalyzeQG(common_base.CommonBase):
         # Get & store ROC curve
         self.roc_curve_dict[model][dim] = sklearn.metrics.roc_curve(Y_test, preds_DNN)
 
-    #---------------------------------------------------------------
-    # Train Laman DNN, using hyperparameter optimization with keras tuner
-    #---------------------------------------------------------------
-    def fit_dnn_laman(self, X_train, Y_train, X_test, Y_test, model, model_settings,r):
-        print()
-        print(f'Training {model} with r = {r}...')
-
-        tuner = keras_tuner.Hyperband(functools.partial(self.dnn_builder, input_shape=[X_train.shape[1]], model_settings=model_settings),
-                                        objective='val_accuracy',
-                                        max_epochs=10,
-                                        factor=3,
-                                        directory='keras_tuner',
-                                        project_name=f'Laman for r = {r}')
-
-        tuner.search(X_train, Y_train, 
-                        batch_size=model_settings['batch_size'],
-                        epochs=model_settings['epochs'], 
-                        validation_split=self.val_frac)
-        
-        # Get the optimal hyperparameters
-        best_hps=tuner.get_best_hyperparameters(num_trials=1)[0]
-        units1 = best_hps.get('units1')
-        units2 = best_hps.get('units2')
-        units3 = best_hps.get('units3')
-        learning_rate = best_hps.get('learning_rate')
-        print()
-        print(f'Best hyperparameters:')
-        print(f'   units: ({units1}, {units2}, {units3})')
-        print(f'   learning_rate: {learning_rate}')
-        print()
-
-        # Retrain the model with best number of epochs
-        hypermodel = tuner.hypermodel.build(best_hps)
-        history = hypermodel.fit(X_train, Y_train, epochs=model_settings['epochs'], validation_split=self.val_frac)
-
-        # Plot metrics as a function of epochs
-        self.plot_NN_epochs(model_settings['epochs'], history, model, dim_label='Laman DNN with r =', dim=r) 
-        
-        # Get predictions for test data set
-        preds_DNN = hypermodel.predict(X_test).reshape(-1)
-        
-        # Get AUC
-        auc_DNN_Laman = sklearn.metrics.roc_auc_score(Y_test, preds_DNN)
-        print(f'Laman DNN,  AUC = {auc_DNN_Laman} (test set)')
-        
-        # Store AUC
-        self.AUC[f'{model}'].append(auc_DNN_Laman)
-        
-        # Get & store ROC curve
-        self.roc_curve_dict[model][r] = sklearn.metrics.roc_curve(Y_test, preds_DNN)
 
     #---------------------------------------------------------------
-    # Train Subjet DNN, using hyperparameter optimization with keras tuner
+    # Train Subjet and Laman DNN, using hyperparameter optimization with keras tuner
     #---------------------------------------------------------------
     def fit_dnn_subjet(self, X_train, Y_train, X_test, Y_test, model, model_settings, r):
         print()
@@ -629,10 +605,10 @@ class AnalyzeQG(common_base.CommonBase):
 
         tuner = keras_tuner.Hyperband(functools.partial(self.dnn_builder, input_shape=[X_train.shape[1]], model_settings=model_settings),
                                         objective='val_accuracy',
-                                        max_epochs=10,
+                                        max_epochs=15,
                                         factor=3,
                                         directory='keras_tuner',
-                                        project_name=f'Subjet DNN with r = {r}')
+                                        project_name=f'{model} with r = {r}')
 
         tuner.search(X_train, Y_train, 
                         batch_size=model_settings['batch_size'],
@@ -651,25 +627,35 @@ class AnalyzeQG(common_base.CommonBase):
         print(f'   learning_rate: {learning_rate}')
         print()
 
+        self.units[f'{model}, r ={r}'] = [units1, units2, units3]
         # Retrain the model with best number of epochs
         hypermodel = tuner.hypermodel.build(best_hps)
-        history = hypermodel.fit(X_train, Y_train, epochs=model_settings['epochs'], validation_split=self.val_frac)
+
+        # Early Stopping
+        early_stopping = keras.callbacks.EarlyStopping(monitor='val_accuracy', patience=6)
+        
+        # Training
+        history = hypermodel.fit(X_train, Y_train, epochs=model_settings['epochs'], validation_split=self.val_frac, callbacks =[early_stopping]) # We employ early stopping
+        
+        history_epochs = len(history.history['loss']) # For the x axis of the plot
+        self.epochs[f'{model}, r = {r}'] = history_epochs
 
         # Plot metrics as a function of epochs
-        self.plot_NN_epochs(model_settings['epochs'], history, model, dim_label='Subjet DNN with r = ',dim=r) 
-
+        self.plot_NN_epochs(history_epochs, history, model, dim_label= f'{model} DNN with r = ', dim=r)  
+ 
         # Get predictions for test data set
         preds_DNN = hypermodel.predict(X_test).reshape(-1)
         
         # Get AUC
-        auc_DNN_Subjet = sklearn.metrics.roc_auc_score(Y_test, preds_DNN)
-        print(f'Subjet DNN,  AUC = {auc_DNN_Subjet} (test set)')
+        auc_DNN= sklearn.metrics.roc_auc_score(Y_test, preds_DNN)
+        print(f'{model},  AUC = {auc_DNN} (test set)')
         
         # Store AUC
-        self.AUC[f'{model}'].append(auc_DNN_Subjet)
-        
+        self.AUC[f'{model}'].append(auc_DNN)
+          
         # Get & store ROC curve
         self.roc_curve_dict[model][r] = sklearn.metrics.roc_curve(Y_test, preds_DNN)
+
 
     #---------------------------------------------------------------
     # Construct model for hyperparameter tuning with keras tuner
@@ -680,13 +666,13 @@ class AnalyzeQG(common_base.CommonBase):
         model.add(keras.layers.Flatten(input_shape=input_shape))
 
         # Tune size of first dense layer
-        hp_units1 = hp.Int('units1', min_value=32, max_value=512, step=32)
-        hp_units2 = hp.Int('units2', min_value=32, max_value=512, step=32)
-        hp_units3 = hp.Int('units3', min_value=32, max_value=512, step=32)
+        hp_units1 = hp.Int('units1', min_value=128, max_value=512, step=64)
+        hp_units2 = hp.Int('units2', min_value=128, max_value=512, step=64)
+        hp_units3 = hp.Int('units3', min_value=128, max_value=512, step=64)
         model.add(keras.layers.Dense(units=hp_units1, activation='relu'))
         model.add(keras.layers.Dense(units=hp_units2, activation='relu'))
         model.add(keras.layers.Dense(units=hp_units3, activation='relu'))
-        model.add(keras.layers.Dense(1,activation='sigmoid'))  # softmax? # Last layer has to be 1 or 2 for binary classification?
+        model.add(keras.layers.Dense(1,activation='sigmoid'))  # For a binary classification softmax = sigmoid
 
         # Print DNN summary
         model.summary()
@@ -734,6 +720,8 @@ class AnalyzeQG(common_base.CommonBase):
         pfn = energyflow.archs.PFN(input_dim=X_PFN.shape[-1],
                                    Phi_sizes=model_settings['Phi_sizes'],
                                    F_sizes=model_settings['F_sizes'])
+        # Early Stopping
+        early_stopping = keras.callbacks.EarlyStopping(monitor='val_acc', patience=8)
 
         # Train model
         history = pfn.fit(X_PFN_train,
@@ -741,10 +729,12 @@ class AnalyzeQG(common_base.CommonBase):
                           epochs=model_settings['epochs'],
                           batch_size=model_settings['batch_size'],
                           validation_data=(X_PFN_val, Y_PFN_val),
-                          verbose=1)
-                          
+                          verbose=1, callbacks =[early_stopping])
+
+        history_epochs = len(history.history['loss']) # For the x axis of the plot    
+        self.epochs[f'{model}']= history_epochs  
         # Plot metrics are a function of epochs
-        self.plot_NN_epochs(model_settings['epochs'], history, model)
+        self.plot_NN_epochs(history_epochs, history, model)
         
         # Get predictions on test data
         preds_PFN = pfn.predict(X_PFN_test, batch_size=1000)
@@ -755,7 +745,66 @@ class AnalyzeQG(common_base.CommonBase):
         self.AUC[f'{model}'].append(auc_PFN)
         
         self.roc_curve_dict[model] = sklearn.metrics.roc_curve(Y_PFN_test[:,1], preds_PFN[:,1])
+
+    #---------------------------------------------------------------
+    # Fit PFN for subjets
+    #---------------------------------------------------------------
+    def fit_sub_pfn(self, model, model_settings, r):
+    
+        x_subjet_input_sub_pfn = []
+        for n in range(self.N_max):
+            x_subjet_input_sub_pfn.append(np.array(self.subjet_input_total[f'subjet_r{r}_z'][:,n]))
+            x_subjet_input_sub_pfn.append(np.array(self.subjet_input_total[f'subjet_r{r}_sub_rap'][:,n]))
+            x_subjet_input_sub_pfn.append(np.array(self.subjet_input_total[f'subjet_r{r}_sub_phi'][:,n]))
+        x_subjet_input_sub_pfn = np.array(x_subjet_input_sub_pfn).T
+        x_subjet_input_sub_pfn = x_subjet_input_sub_pfn.reshape(self.n_total,self.N_max,3)  # To bring it to the form (n_total, n_particles, dof of each particle)
+
+        # Preprocess by centering jets and normalizing pts
+        for x_PFN in x_subjet_input_sub_pfn:
+            mask = x_PFN[:,0] > 0
+            yphi_avg = np.average(x_PFN[mask,1:3], weights=x_PFN[mask,0], axis=0)
+            x_PFN[mask,1:3] -= yphi_avg
+            x_PFN[mask,0] /= x_PFN[:,0].sum()
+
+        self.y_total_sub_pfn = energyflow.utils.to_categorical(self.y_total, num_classes=2)
+
         
+
+        # Split data into train, val and test sets
+        (X_PFN_train, X_PFN_val, X_PFN_test, Y_PFN_train, Y_PFN_val, Y_PFN_test) = energyflow.utils.data_split(x_subjet_input_sub_pfn, self.y_total_sub_pfn,
+                                                                                             val=self.n_val, test=self.n_test)
+        # Build architecture
+        pfn = energyflow.archs.PFN(input_dim=x_subjet_input_sub_pfn.shape[-1],
+                                   Phi_sizes=model_settings['Phi_sizes'],
+                                   F_sizes=model_settings['F_sizes'])
+
+        # Early Stopping
+        early_stopping = keras.callbacks.EarlyStopping(monitor='val_acc', patience=8)
+
+        # Train model
+        history = pfn.fit(X_PFN_train,
+                          Y_PFN_train,
+                          epochs=model_settings['epochs'],
+                          batch_size=model_settings['batch_size'],
+                          validation_data=(X_PFN_val, Y_PFN_val),
+                          verbose=1, callbacks =[early_stopping])
+
+        history_epochs = len(history.history['loss']) # For the x axis of the plot    
+        self.epochs[f'{model}, r = {r}'] = history_epochs             
+        # Plot metrics are a function of epochs
+        self.plot_NN_epochs(history_epochs, history, model)
+        
+        # Get predictions on test data
+        preds_PFN = pfn.predict(X_PFN_test, batch_size=1000)
+
+        # Get AUC and ROC curve + make plot
+        auc_PFN = sklearn.metrics.roc_auc_score(Y_PFN_test[:,1], preds_PFN[:,1])
+        print('Particle Flow Networks/Deep Sets: AUC = {} (test set)'.format(auc_PFN))
+        self.AUC[f'{model}'].append(auc_PFN)
+        
+        self.roc_curve_dict[model] = sklearn.metrics.roc_curve(Y_PFN_test[:,1], preds_PFN[:,1])
+
+
     #---------------------------------------------------------------
     # Fit ML model -- (IRC safe) Energy Flow Networks
     #---------------------------------------------------------------
@@ -820,16 +869,22 @@ class AnalyzeQG(common_base.CommonBase):
                                    F_sizes=model_settings['F_sizes'],
                                    optimizer=opt)
         
+        # Early Stopping
+        early_stopping = keras.callbacks.EarlyStopping(monitor='val_acc', patience=8)
+
         # Train model
         history = efn.fit([z_EFN_train,p_EFN_train],
                           Y_EFN_train,
                           epochs=model_settings['epochs'],
                           batch_size=model_settings['batch_size'],
                           validation_data=([z_EFN_val,p_EFN_val], Y_EFN_val),
-                          verbose=1)
-                          
+                          verbose=1, callbacks =[early_stopping])
+
+        history_epochs = len(history.history['loss']) # For the x axis of the plot
+        self.epochs[f'{model}'] = history_epochs
+
         # Plot metrics are a function of epochs
-        self.plot_NN_epochs(model_settings['epochs'], history, model)
+        self.plot_NN_epochs(history_epochs, history, model)
         
         # Get predictions on test data
         preds_EFN = efn.predict([z_EFN_test,p_EFN_test], batch_size=1000)     

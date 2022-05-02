@@ -11,6 +11,7 @@ import yaml
 import h5py
 import time
 from collections import defaultdict
+import math
 
 # Data analysis and plotting
 import pandas as pd
@@ -69,10 +70,7 @@ class ProcessQG(common_base.CommonBase):
         self.R = config['R']
         self.pt = config['pt']
         self.y_max = config['y_max']
-
-        self.Mom_norm = config['Mom_norm']
-
-        self.n_total = config['n_max']
+        self.n_total = config['n_total']
         self.event_index = 0
           
         # Nsubjettiness basis
@@ -88,6 +86,12 @@ class ProcessQG(common_base.CommonBase):
         # Subjet basis
         self.N_max = config['N_max']
         self.r_list = config['r']
+
+        # Clustering Algorithm 
+        self.Clustering_Alg = config['Clustering_Alg']
+
+        #Laman Construction
+        self.Laman_construction = config['Laman_construction']
 
     #---------------------------------------------------------------
     # Initialize empty data structures to store results
@@ -162,6 +166,7 @@ class ProcessQG(common_base.CommonBase):
             self.output_final[f'subjet_{key}'] = val
             print(key)
 
+
         # Write jet arrays to file
         with h5py.File(os.path.join(self.output_dir, 'subjets_unshuffled.h5'), 'w') as hf:
             print('-------------------------------------')
@@ -175,18 +180,27 @@ class ProcessQG(common_base.CommonBase):
             for key,val in self.output_final.items():
                 hf.create_dataset(key, data=val)
                 print(f'{key}: {val.shape}')
+
                 # Check whether any training entries are empty
                 [print(f'WARNING: input entry {i} is empty') for i,x in enumerate(val) if not x.any()]
 
             for qa_observable in self.output['qa']:
                 hf.create_dataset(f'{qa_observable}', data=self.output_numpy['qa'][qa_observable])
                 print(f'{qa_observable}')
+
             # Make some QA plots
             self.plot_QA()
+
+            # Store some info on the output directory so that we don't need to remember the exact details of the config when we run the code at a later date
 
             hf.create_dataset('N_list', data=self.N_list)
             hf.create_dataset('beta_list', data=self.beta_list)
             hf.create_dataset('r_list', data=self.r_list)
+            hf.create_dataset('N_max', data=self.N_max)
+            hf.create_dataset('n_total', data = self.n_total)
+            hf.create_dataset('Clustering_Alg', data = self.Clustering_Alg)
+            hf.create_dataset('Laman_construction', data = self.Laman_construction)
+            
 
 
     #---------------------------------------------------------------
@@ -200,7 +214,15 @@ class ProcessQG(common_base.CommonBase):
             return
 
         # Find jets -- one jet per "event"
-        jet_def = fj.JetDefinition(fj.antikt_algorithm, fj.JetDefinition.max_allowable_R)
+        if self.Clustering_Alg == 'kt_algorithm':
+            jet_def = fj.JetDefinition(fj.kt_algorithm, fj.JetDefinition.max_allowable_R)
+        elif self.Clustering_Alg == 'antikt_algorithm':
+            jet_def = fj.JetDefinition(fj.antikt_algorithm, fj.JetDefinition.max_allowable_R)
+        elif self.Clustering_Alg == 'cambridge_algorithm':
+            jet_def = fj.JetDefinition(fj.cambridge_algorithm, fj.JetDefinition.max_allowable_R)
+        else:
+            sys.exit(f'Wrong Clustering_Algorithm.')
+
         cs = fj.ClusterSequence(fj_particles, jet_def)
         jet_selected = fj.sorted_by_pt(cs.inclusive_jets())[0]
         jet_pt = jet_selected.pt()
@@ -245,65 +267,115 @@ class ProcessQG(common_base.CommonBase):
         
         for r in self.r_list:
 
-            subjet_def = fj.JetDefinition(fj.antikt_algorithm, r)
+            if self.Clustering_Alg == 'kt_algorithm':
+                subjet_def = fj.JetDefinition(fj.kt_algorithm, r)
+            elif self.Clustering_Alg == 'antikt_algorithm':
+                subjet_def = fj.JetDefinition(fj.antikt_algorithm, r)
+            elif self.Clustering_Alg == 'cambridge_algorithm':
+                subjet_def = fj.JetDefinition(fj.cambridge_algorithm, r)
+            else:
+                sys.exit(f'Wrong Clustering_Algorithm.')
+
             cs_subjet = fj.ClusterSequence(jet.constituents(), subjet_def)
             subjets = fj.sorted_by_pt(cs_subjet.inclusive_jets())
 
             # Construct a Laman graph for each jet, and save the edges (node connections) and angles
-            edge_list = []
-            angle_list = []
-            subjet_angle_list=[]
+            edges_list = []
+            angles_list = []
+            subjet_phi_list=[]
             subjet_rap_list=[]
             z_list = []
+
             for N in range(self.N_max): #the max number of N is N_max-1 because we start from 0
 
                 # First, fill the z values of the node + (η,φ) for the subjets
                 if N < len(subjets):
-                    z = subjets[N].pt() / jet.pt()
+                    z = subjets[N].pt()/jet.pt()
                     z_list.append(z)
-                    subjet_angle = subjets[N].phi()
+                    subjet_phi = subjets[N].phi()
                     subjet_rap = subjets[N].rap()
-                    subjet_angle_list.append(subjet_angle)
+                    subjet_phi_list.append(subjet_phi)
                     subjet_rap_list.append(subjet_rap)
                 else:
                     z_list.append(0)
-                    subjet_angle_list.append(0)
+                    subjet_phi_list.append(0)
                     subjet_rap_list.append(0)
-                
-                
+
+            
 
                 # Henneberg construction using Type 1 connections
                 # To start, let's just build based on pt ordering
                 # A simple construction is to have each node N connected to nodes N+1,N+2
                 # We will also zero-pad for now (edges denoted [-1,-1]) to keep fixed-size arrays
                 
-                if N < self.N_max-1: 
-                    if N < len(subjets)-1: 
-                        angle = subjets[N].delta_R(subjets[N+1])
-                        edge_list.append(np.array([N, N+1])) #in order to know to which pair the angle's list entry corresponds to 
-                        angle_list.append(angle)
-                    else:
-                        edge_list.append(np.array([-1, -1]))
-                        angle_list.append(0)
+                if self.Laman_construction == 'naive':
+                    if N < self.N_max-1: 
+                        if N < len(subjets)-1: 
+                            angle = subjets[N].delta_R(subjets[N+1])
+                            edges_list.append(np.array([N, N+1])) #in order to know to which pair the angle's list entry corresponds to 
+                            angles_list.append(angle)
+                        else:
+                            edges_list.append(np.array([-1, -1]))
+                            angles_list.append(0)
 
-                if N < self.N_max-2: 
-                    if N < len(subjets)-2:
-                        angle = subjets[N].delta_R(subjets[N+2])
-                        edge_list.append(np.array([N, N+2]))
-                        angle_list.append(angle) 
-                    else:
-                        edge_list.append(np.array([-1, -1]))
-                        angle_list.append(0)
-            
-            if self.Mom_norm == True:
-                for N in range(self.N_max):
-                    z_list[N] = np.array(z_list[N])/sum(np.array(z_list))
+                    if N < self.N_max-2: 
+                        if N < len(subjets)-2:
+                            angle = subjets[N].delta_R(subjets[N+2])
+                            edges_list.append(np.array([N, N+2]))
+                            angles_list.append(angle) 
+                        else:
+                            edges_list.append(np.array([-1, -1]))
+                            angles_list.append(0)
+
+                elif self.Laman_construction == '1N':
+                    if N == 0:
+                        for i in range(self.N_max-1): # Because we want to start from i=1 
+                            if i < len(subjets)-1:
+                                angle = subjets[0].delta_R(subjets[i+1])
+                                edges_list.append(np.array([0, i+1])) #in order to know to which pair the angle's list entry corresponds to 
+                                angles_list.append(angle)
+                            else:
+                                edges_list.append(np.array([0, -1]))
+                                angles_list.append(0)
+                               
+                    elif N < self.N_max-1:
+                        if N < len(subjets)-1:
+                            angle = subjets[N].delta_R(subjets[N+1])
+                            edges_list.append(np.array([N, N+1]))
+                            angles_list.append(angle) 
+                        else:
+                            edges_list.append(np.array([-1, -1]))
+                            angles_list.append(0)
+
+                elif self.Laman_construction == '1N2N':
+                    if N == 0:
+                        for i in range(len(subjets)-1): # Because we want to start from i=1
+                            if i < len(subjets)-1:
+                                angle = subjets[0].delta_R(subjets[i+1])
+                                edges_list.append(np.array([0, i+1])) #in order to know to which pair the angle's list entry corresponds to 
+                                angles_list.append(angle)
+                            else:
+                                edges_list.append(np.array([0, -1]))
+                                angles_list.append(0)
+                    elif N == 1:
+                        for i in range(len(subjets)-2): # Because we want to start from i=2
+                            if i < len(subjets)-2:
+                                angle = subjets[1].delta_R(subjets[i+2])
+                                edges_list.append(np.array([1, i+2])) #in order to know to which pair the angle's list entry corresponds to 
+                                angles_list.append(angle)
+                            else:
+                                edges_list.append(np.array([1, -1]))
+                                angles_list.append(0)         
+                else:
+                    sys.exit(f'Wrong Laman Construction Algorithm.')
+                    
 
 
-            self.output[f'subjet'][f'r{r}_edges'].append(np.array(edge_list))
-            self.output[f'subjet'][f'r{r}_angles'].append(np.array(angle_list))
+
+            self.output[f'subjet'][f'r{r}_edges'].append(np.array(edges_list))
+            self.output[f'subjet'][f'r{r}_angles'].append(np.array(angles_list))
             self.output[f'subjet'][f'r{r}_z'].append(np.array(z_list))
-            self.output[f'subjet'][f'r{r}_sub_angles'].append(np.array(subjet_angle_list))
+            self.output[f'subjet'][f'r{r}_sub_phi'].append(np.array(subjet_phi_list))
             self.output[f'subjet'][f'r{r}_sub_rap'].append(np.array(subjet_rap_list))
                 
         
