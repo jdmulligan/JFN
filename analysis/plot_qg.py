@@ -56,6 +56,7 @@ class PlotQG(common_base.CommonBase):
 
         self.models = config['models']
         self.K_list = config['K']
+        self.r_list = config['r']
         
     #---------------------------------------------------------------
     # Main processing function
@@ -86,6 +87,15 @@ class PlotQG(common_base.CommonBase):
             roc_list = {}
             roc_list['PFN'] = self.roc_curve_dict['pfn']
             roc_list['EFN'] = self.roc_curve_dict['efn']
+            for K in self.K_list:
+                roc_list[f'Nsub (M = {K}), DNN'] = self.roc_curve_dict['nsub_dnn'][K]
+            self.plot_roc_curves(roc_list)
+
+        if 'sub_dnn' in self.models and 'laman_dnn' in self.models and 'nsub_dnn' in self.models:
+            roc_list = {}
+            for r in self.r_list:
+                roc_list[f'sub (r = {r}), DNN'] = self.roc_curve_dict['sub_dnn'][r]
+                roc_list[f'laman (r = {r}), DNN'] = self.roc_curve_dict['laman_dnn'][r]
             for K in self.K_list:
                 roc_list[f'Nsub (M = {K}), DNN'] = self.roc_curve_dict['nsub_dnn'][K]
             self.plot_roc_curves(roc_list)
@@ -139,10 +149,10 @@ class PlotQG(common_base.CommonBase):
                 if label == 'EFN':
                     label = 'Energy Flow Network'
 
-            elif 'Nsub' in label or 'subjet' in label:
+            elif 'Nsub' in label or 'subjet' in label or 'sub' in label or 'laman' in label:
                 linewidth = 2
                 alpha = 0.9
-                linestyle = 'solid'
+                linestyle = self.linestyle(label)
                 color=self.color(label)
                 legend_fontsize = 12
             else:
@@ -223,15 +233,14 @@ class PlotQG(common_base.CommonBase):
             color = sns.xkcd_rgb['faded purple'] 
         elif label in ['EFN']:
             color = sns.xkcd_rgb['faded red']  
-        elif label in [rf'Nsub (M = {self.K_list[4]}), DNN', rf'Nsub (M = {self.K_list[4]}), Linear']:
+            #color = sns.xkcd_rgb['medium green'] 
+        elif label in [f'sub (r = {self.r_list[1]}), DNN']:
             color = sns.xkcd_rgb['light lavendar']    
-        elif label in ['subjet', rf'Nsub (M = {self.K_list[3]}), DNN', rf'Nsub (M = {self.K_list[3]}), Linear']:
+        elif label in [f'sub (r = {self.r_list[0]}), DNN']:
             color = sns.xkcd_rgb['dark sky blue']    
-        elif label in [rf'Nsub (M = {self.K_list[2]}), DNN', rf'Nsub (M = {self.K_list[2]}), Linear']:
-            color = sns.xkcd_rgb['medium green'] 
-        elif label in [rf'Nsub (M = {self.K_list[1]}), DNN', rf'Nsub (M = {self.K_list[1]}), Linear']:
+        elif label in [f'laman (r = {self.r_list[1]}), DNN']:
             color = sns.xkcd_rgb['light brown']  
-        elif label in [rf'Nsub (M = {self.K_list[0]}), DNN', rf'Nsub (M = {self.K_list[0]}), Linear']:
+        elif label in [rf'Nsub (M = {self.K_list[0]}), DNN', f'laman (r = {self.r_list[0]}), DNN']:
             color = sns.xkcd_rgb['watermelon'] 
         elif label in ['jet_theta_g']:
             color = sns.xkcd_rgb['medium brown']
@@ -246,7 +255,7 @@ class PlotQG(common_base.CommonBase):
     def linestyle(self, label):
  
         linestyle = None
-        if 'PFN' in label and 'min_pt' in label:
+        if 'PFN' in label and 'min_pt' in label or 'Nsub' in label:
             linestyle = 'dotted'
         elif 'PFN' in label or 'EFN' in label or 'DNN' in label or 'pfn' in label:
             linestyle = 'solid'

@@ -338,10 +338,7 @@ class AnalyzeQG(common_base.CommonBase):
         self.train_models()
 
         self.diff = np.array(self.AUC['laman_dnn']) - np.array(self.AUC['sub_dnn']) 
-        # Run plotting script
-        print('Run plotting script...')
-        #cmd = f'python analysis/plot_qg.py -c {self.config_file} -o {self.output_dir}'
-        #subprocess.run(cmd, check=True, shell=True)
+
         print(f'Dataset size : {self.n_total}')
         print(f'r_list : {self.r_list}')
         print(f'K_list : {self.K_list}')
@@ -353,7 +350,10 @@ class AnalyzeQG(common_base.CommonBase):
         print(f'AUC : {self.AUC}' )
         print(f'AUC Difference Laman - Sub : {self.diff}')
         
-
+        # Run plotting script
+        print('Run plotting script...')
+        cmd = f'python analysis/plot_qg.py -c {self.config_file} -o {self.output_dir}'
+        subprocess.run(cmd, check=True, shell=True)
 
     #---------------------------------------------------------------
     # Train models
