@@ -15,7 +15,13 @@ n_total: 2100
 # Nsubjettiness basis
 K_max: 8
 
-# Subjet basis...
+# Subjet basis: 'exclusive' or 'inclusive'
+subjet_basis: 'inclusive'
+
+# 1. Exclusive, fixed number of jets; choose njet. Note: using the anti-kt alg. here gives a warning from fastjet
+njet: 6
+
+# 2. Inclusive, fixed value for the subjet radius; choose radii r and cutoff N_max
 N_max: 10
 r: [0.01, 0.1] 
 

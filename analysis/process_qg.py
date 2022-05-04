@@ -84,6 +84,8 @@ class ProcessQG(common_base.CommonBase):
         self.beta_list += [1,2]
 
         # Subjet basis
+        self.subjet_basis = config['subjet_basis']
+        self.njet = config['njet']
         self.N_max = config['N_max']
         self.r_list = config['r']
 
@@ -277,8 +279,14 @@ class ProcessQG(common_base.CommonBase):
                 sys.exit(f'Wrong Clustering_Algorithm.')
 
             cs_subjet = fj.ClusterSequence(jet.constituents(), subjet_def)
-            subjets = fj.sorted_by_pt(cs_subjet.inclusive_jets())
-
+            
+            if self.subjet_basis == 'inclusive':
+                subjets = fj.sorted_by_pt(cs_subjet.inclusive_jets())
+            elif self.subjet_basis == 'exclusive':
+                subjets = fj.sorted_by_pt(cs_subjet.exclusive_jets_up_to(self.njet))
+            else:
+                sys.exit(f'Invalid choice for subjet_basis')
+                
             # Construct a Laman graph for each jet, and save the edges (node connections) and angles
             edges_list = []
             angles_list = []
