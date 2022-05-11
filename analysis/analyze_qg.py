@@ -448,12 +448,69 @@ class AnalyzeQG(common_base.CommonBase):
     #---------------------------------------------------------------
     def fit_subjet_dnn(self, model, model_settings,r):
 
-        # Preprocessing: zero mean unit variance
-        X_subjet_train = sklearn.preprocessing.scale(self.X_subjet_train[f'r{r}'])
-        X_subjet_test = sklearn.preprocessing.scale(self.X_subjet_test[f'r{r}'])
+        # Preprocessing:
+        # There are two types of preprocessing to consider:
+        #   (1) Center each jet around eta,phi=0
+        #   (2) Normalize each feature to zero mean and unit variance (across the full set of jets)
+        #
+        # Note that for nsubjettiness/laman, there is no need to do (1), since the features are independent of coordinates.
+        # 
+        # We should treat the zero-pads carefully during the preprocessing. There are several possibilities:
+        #   (A) Center all the non-zero-pad values, then keep the zero-pad values at 0
+        #   (B) Center all the non-zero-pad values, and also shift the zero-pad values to a constant at the lower edge of the non-zero-pad range
+        #   (C) Don't center, and normalize all the values including the zero-pad values
+        # It seems to me that option (B) should be the best...
+        # 
+        # Note that for nsubjettiness, 0 is at the lower edge of the allowed range.
+        #
+        # For subjet/laman cases, we probably want to avoid (C) since 0 is not the lower edge of the angular variables. 
+        # Moreover, the features depend on the jet angular coordinates, so we want to center the jets themselves:
+        #  - Using sklearn.preprocessing.scale, this would normalize each feature (i.e. {phi1,i}, {phi2,i}) independently,
+        #    and would result in nonzero mean for each jet (since eta_avg,phi_avg=0) but on-average unit variance.
+        #  - Instead, we can manually center each jet's eta-phi at 0 -- i.e. loop through subjets and 
+        #    normalize {phi1, ..., phi_nmax} to zero mean and range [-R, R]. We could further scale the variance to 1.
+        preprocessing_option = 'B'
+
+        if preprocessing_option == 'A':
+
+            X_subjet_train = self.center_eta_phi(self.X_subjet_train[f'r{r}'], shift_zero_pads=False)
+            X_subjet_test = self.center_eta_phi(self.X_subjet_test[f'r{r}'], shift_zero_pads=False)
+
+        elif preprocessing_option == 'B':
+
+            X_subjet_train = self.center_eta_phi(self.X_subjet_train[f'r{r}'], shift_zero_pads=True)
+            X_subjet_test = self.center_eta_phi(self.X_subjet_test[f'r{r}'], shift_zero_pads=True)
+
+            # TODO: should we also fix the orientation, e.g. rotate to align leading and subleading subjets?
+
+            X_subjet_train = sklearn.preprocessing.scale(X_subjet_train)
+            X_subjet_test = sklearn.preprocessing.scale(X_subjet_test)
+
+        elif preprocessing_option == 'C':
+            X_subjet_train = sklearn.preprocessing.scale(self.X_subjet_train[f'r{r}'])
+            X_subjet_test = sklearn.preprocessing.scale(self.X_subjet_test[f'r{r}'])
 
         self.fit_dnn_subjet(X_subjet_train, self.y_subjet_train[f'r{r}'], X_subjet_test, self.y_subjet_test[f'r{r}'], model, model_settings,r) 
 
+    #---------------------------------------------------------------
+    # Center eta-phi of subjets 
+    #---------------------------------------------------------------
+    def center_eta_phi(self, X, shift_zero_pads=True):
+
+        # Since there are a different number of non-empty subjets per jet, we loop through jets and normalize pt/eta/phi for each set of subjets.
+        for i,jet in enumerate(X):
+
+            # Compute eta-phi avg
+            # For convenience, reshape (z_1, η_1, φ_1,...,z_n, η_n, φ_n) --> [[z_1, η_1, φ_1], ...]
+            jet_2d = np.reshape(jet, (-1, 3))
+            mask = jet_2d[:,0] > 0
+            yphi_avg = np.average(jet_2d[mask,1:], weights=jet_2d[mask,0], axis=0)
+            jet_2d[mask,1:] -= yphi_avg
+            if shift_zero_pads:
+                jet_2d[~mask,1:] -= self.R
+            X[i] = jet_2d.ravel()
+
+        return X
 
     #---------------------------------------------------------------
     # Fit ML model -- SGDClassifier or LinearDiscriminant
