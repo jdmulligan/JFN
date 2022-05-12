@@ -77,6 +77,11 @@ class PlotQG(common_base.CommonBase):
     #---------------------------------------------------------------
     def plot_models(self):
 
+        if 'particle_gnn' in self.models:
+            roc_list = {}
+            roc_list['particle_gnn'] = self.roc_curve_dict['particle_gnn']
+            self.plot_roc_curves(roc_list)
+
         if 'pfn' in self.models and 'efn' in self.models:
             roc_list = {}
             roc_list['PFN'] = self.roc_curve_dict['pfn']
