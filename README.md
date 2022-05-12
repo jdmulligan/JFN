@@ -1,6 +1,9 @@
 # JFN
 
 ## Setup software environment – on hiccup cluster
+
+### Logon and allocate a node
+  
 Logon to hiccup:
 ```
 ssh <user>@hic.lbl.gov
@@ -13,25 +16,25 @@ First, request an interactive node from the slurm batch system:
    which requests 1 full node (20 cores) for 2 hours in the `quick` queue. You can choose the time and queue: you can use the `quick` partition for up to a 2 hour session, `std` for a 24 hour session, or `long` for a 72 hour session – but you will wait longer for the longer queues). 
 Depending how busy the squeue is, you may get the node instantly, or you may have to wait awhile.
 When you’re done with your session, just type `exit`.
-Please do not run anything bust the lightest tests on the login node. If you are finding that you have to wait a long time, let us know and we can take a node out of the slurm queue and logon to it directly.
+Please do not run anything but the lightest tests on the login node. If you are finding that you have to wait a long time, let us know and we can take a node out of the slurm queue and logon to it directly.
 
-Load some modules that we will need:
-```
-module use /software/users/james/heppy/modules
-module load heppy/1.0
-module list
-```
-
-Then initialize a python environment with the packages listed in Pipfile:
+### Initialize environment
+  
+Now we need to initialize the environment: load heppy, set the python version, and create a virtual environment for python packages.
+Since various ML packages require higher python versions than installed system-wide, we have set up an initialization script to take care of this. 
+The first time you set up, you can do:
 ```
 cd JFN
-pipenv install         # (this step is only needed the first time)
-pipenv shell
+./init.sh --install
+```
+  
+On subsequent times, you don't need to pass the `install` flag:
+```
+cd JFN
+./init.sh
 ```
 
 Now we are ready to run our scripts.
-
-Note that the setup above is designed to run on hiccup – some modifications to the python setup might be needed if running elsewhere. 
 
 ## Quark-gluon analysis
 
