@@ -71,6 +71,8 @@ class ProcessQG(common_base.CommonBase):
         self.pt = config['pt']
         self.y_max = config['y_max']
         self.n_total = config['n_total']
+        self.n_val = config['n_val']
+        self.n_test = config['n_test']
         self.event_index = 0
           
         # Nsubjettiness basis
@@ -85,17 +87,40 @@ class ProcessQG(common_base.CommonBase):
 
         # Subjet basis
         self.subjet_basis = config['subjet_basis']
-        self.njet = config['njet']
-        self.N_max = config['N_max']
+        self.njet_list = config['njet']
+        self.N_max_list= config['N_max']
         self.r_list = config['r']
+
+        if type(self.njet_list) != list:
+            print(f'ERROR: njet must be a list')
+            print(f'Changing njet into a list')
+            self.njet_list = list([self.njet_list])
+        if type(self.N_max_list) != list:
+            print(f'ERROR: N_max must be a list')
+            print(f'Changing N_max into a list')
+            self.N_max_list = list([self.N_max_list])
+
+         if self.subjet_basis == 'exclusive':
+            if self.r_list != [0.4]:
+                    print('ERROR: Wrong subjet radius r. For exlusive basis we need r = 0.4')
+                    print('Changing radius to r = 0.4')
+                    self.r_list = [0.4]
+                    time.sleep(2)
+            if self.Clustering_Alg == 'antikt_algorithm':
+                sys.exit(f'ERROR: For the exclusive algorithm we can not use antikt_algorithm (fastjet throws a warning)')
 
         # Clustering Algorithm 
         self.Clustering_Alg = config['Clustering_Alg']
 
-        #Laman Construction
+        # Laman Construction
         self.Laman_construction = config['Laman_construction']
 
-    #---------------------------------------------------------------
+
+        # Load Herwig Dataset:
+        self.Herwig_dataset = config['Herwig_dataset']    
+
+
+    #---------------------------------------------------------------        
     # Initialize empty data structures to store results
     #---------------------------------------------------------------
     def initialize_data_structures(self):
@@ -145,6 +170,23 @@ class ProcessQG(common_base.CommonBase):
         print('Done.')
         print()
 
+         # Load the Herwig Dataset for testing (For now only pfn and sub_pfn are supported)
+        if self.Herwig_dataset == 'True':
+
+            X_herwig, self.y_herwig = energyflow.datasets.qg_jets.load(num_data=self.n_val + self.n_test, pad=True, 
+                                                     generator='herwig',  # Herwig is also available
+                                                     with_bc=False        # Turn on to enable heavy quarks
+                                                     )
+          
+            columns = ['pt', 'y', 'phi', 'pid']
+            df_particles_herwig = pd.DataFrame(X_herwig.reshape(-1, 4), columns=columns)
+            df_particles_herwig.index = np.repeat(np.arange(X_herwig.shape[0]), X_herwig.shape[1]) + 1
+            df_particles_herwig.index.name = 'jet_id'
+
+            df_fjparticles_herwig_grouped = df_particles_herwig.groupby('jet_id')
+
+            self.df_fjparticles_herwig = df_fjparticles_herwig_grouped.apply(self.get_fjparticles)
+
     #---------------------------------------------------------------
     # Main processing function
     #---------------------------------------------------------------
@@ -154,7 +196,10 @@ class ProcessQG(common_base.CommonBase):
         # Fill each of the jet_variables into a list
         fj.ClusterSequence.print_banner()
         print('Finding jets and computing N-subjettiness and subjets...')
-        result = [self.analyze_event(fj_particles) for fj_particles in self.df_fjparticles]
+        result = [self.analyze_event(fj_particles, 'pythia') for fj_particles in self.df_fjparticles]
+        
+        if self.Herwig_dataset == 'True':
+           result = [self.analyze_event(fj_particles, 'herwig') for fj_particles in self.df_fjparticles_herwig]
         
         # Transform the dictionary of lists into a dictionary of numpy arrays
         self.output_numpy = {}
@@ -177,6 +222,9 @@ class ProcessQG(common_base.CommonBase):
             hf.create_dataset(f'y', data=self.y)
             print(f'labels: {self.y.shape}')
             
+            if self.Herwig_dataset == 'True':
+                hf.create_dataset(f'y_herwig', data=self.y_herwig)
+
 
             # Write numpy arrays
             for key,val in self.output_final.items():
@@ -198,32 +246,27 @@ class ProcessQG(common_base.CommonBase):
             hf.create_dataset('N_list', data=self.N_list)
             hf.create_dataset('beta_list', data=self.beta_list)
             hf.create_dataset('r_list', data=self.r_list)
-            hf.create_dataset('N_max', data=self.N_max)
+            hf.create_dataset('N_max', data=self.N_max_list)
             hf.create_dataset('n_total', data = self.n_total)
             hf.create_dataset('Clustering_Alg', data = self.Clustering_Alg)
             hf.create_dataset('Laman_construction', data = self.Laman_construction)
-            
+            hf.create_dataset('N_clustering', data = self.N_cluster_list)   
+            hf.create_dataset('Herwig_dataset', data = self.Herwig_dataset)        
 
+            
 
     #---------------------------------------------------------------
     # Process an event
     #---------------------------------------------------------------
-    def analyze_event(self, fj_particles):
+    def analyze_event(self, fj_particles, dataset_choice):
     
         # Check that the entries exist appropriately
         if fj_particles and type(fj_particles) != fj.vectorPJ:
             print('fj_particles type mismatch -- skipping event')
             return
 
-        # Find jets -- one jet per "event"
-        if self.Clustering_Alg == 'kt_algorithm':
-            jet_def = fj.JetDefinition(fj.kt_algorithm, fj.JetDefinition.max_allowable_R)
-        elif self.Clustering_Alg == 'antikt_algorithm':
-            jet_def = fj.JetDefinition(fj.antikt_algorithm, fj.JetDefinition.max_allowable_R)
-        elif self.Clustering_Alg == 'cambridge_algorithm':
-            jet_def = fj.JetDefinition(fj.cambridge_algorithm, fj.JetDefinition.max_allowable_R)
-        else:
-            sys.exit(f'Wrong Clustering_Algorithm.')
+        # Find jets -- one jet per "event".  We only use antikt for the Jet Clustering
+        jet_def = fj.JetDefinition(fj.antikt_algorithm, fj.JetDefinition.max_allowable_R)
 
         cs = fj.ClusterSequence(fj_particles, jet_def)
         jet_selected = fj.sorted_by_pt(cs.inclusive_jets())[0]
@@ -233,7 +276,7 @@ class ProcessQG(common_base.CommonBase):
             sys.exit(f'ERROR: jet found with pt={jet_pt}, y={jet_y} outside of expected range.')
 
         # Compute jet quantities and store in our data structures
-        self.analyze_jets(jet_selected)
+        self.analyze_jets(jet_selected, dataset_choice)
 
         self.event_index += 1
         if self.event_index%1000 == 0:
@@ -242,10 +285,10 @@ class ProcessQG(common_base.CommonBase):
     #---------------------------------------------------------------
     # Analyze jets of a given event.
     #---------------------------------------------------------------
-    def analyze_jets(self, jet_selected):
+    def analyze_jets(self, jet_selected, dataset_choice):
 
         self.fill_nsubjettiness(jet_selected)
-        self.fill_subjets(jet_selected)
+        self.fill_subjets(jet_selected, dataset_choice)
         self.fill_qa(jet_selected)
 
     #---------------------------------------------------------------
@@ -265,8 +308,15 @@ class ProcessQG(common_base.CommonBase):
     #---------------------------------------------------------------
     # Compute subjet kinematics...
     #---------------------------------------------------------------
-    def fill_subjets(self, jet):
+    def fill_subjets(self, jet, dataset_choice):
         
+        if self.subjet_basis == 'inclusive':
+            self.N_cluster_list = self.N_max_list
+        elif self.subjet_basis == 'exclusive':
+            self.N_cluster_list = self.njet_list
+        else:
+            sys.exit(f'ERROR: Invalid choice for subjet_basis')
+
         for r in self.r_list:
 
             if self.Clustering_Alg == 'kt_algorithm':
@@ -276,115 +326,124 @@ class ProcessQG(common_base.CommonBase):
             elif self.Clustering_Alg == 'cambridge_algorithm':
                 subjet_def = fj.JetDefinition(fj.cambridge_algorithm, r)
             else:
-                sys.exit(f'Wrong Clustering_Algorithm.')
+                sys.exit(f'ERROR: Wrong Clustering_Algorithm.')
 
             cs_subjet = fj.ClusterSequence(jet.constituents(), subjet_def)
-            
-            if self.subjet_basis == 'inclusive':
-                subjets = fj.sorted_by_pt(cs_subjet.inclusive_jets())
-            elif self.subjet_basis == 'exclusive':
-                subjets = fj.sorted_by_pt(cs_subjet.exclusive_jets_up_to(self.njet))
-            else:
-                sys.exit(f'Invalid choice for subjet_basis')
-                
+
+
+
             # Construct a Laman graph for each jet, and save the edges (node connections) and angles
-            edges_list = []
-            angles_list = []
-            subjet_phi_list=[]
-            subjet_rap_list=[]
-            z_list = []
+            for N_cluster in self.N_cluster_list:
 
-            for N in range(self.N_max): #the max number of N is N_max-1 because we start from 0
+                edges_list = []
+                angles_list = []
+                subjet_phi_list=[]
+                subjet_rap_list=[]
+                z_list = []
 
-                # First, fill the z values of the node + (η,φ) for the subjets
-                if N < len(subjets):
-                    z = subjets[N].pt()/jet.pt()
-                    z_list.append(z)
-                    subjet_phi = subjets[N].phi()
-                    subjet_rap = subjets[N].rap()
-                    subjet_phi_list.append(subjet_phi)
-                    subjet_rap_list.append(subjet_rap)
-                else:
-                    z_list.append(0)
-                    subjet_phi_list.append(0)
-                    subjet_rap_list.append(0)
+                if self.subjet_basis == 'inclusive':
+                    subjets = fj.sorted_by_pt(cs_subjet.inclusive_jets())
+                elif self.subjet_basis == 'exclusive':
+                    subjets = fj.sorted_by_pt(cs_subjet.exclusive_jets_up_to(N_cluster))
+
+                for N in range(N_cluster): #the max number of N is N_max-1 because we start from 0
+                    # First, fill the z values of the node + (η,φ) for the subjets
+                    if N < len(subjets):
+                        z = subjets[N].pt()/jet.pt()
+                        z_list.append(z)
+                        subjet_phi = subjets[N].phi()
+                        subjet_rap = subjets[N].rap()
+                        subjet_phi_list.append(subjet_phi)
+                        subjet_rap_list.append(subjet_rap)
+                    else:
+                        z_list.append(0)
+                        subjet_phi_list.append(0)
+                        subjet_rap_list.append(0)
 
             
 
-                # Henneberg construction using Type 1 connections
-                # To start, let's just build based on pt ordering
-                # A simple construction is to have each node N connected to nodes N+1,N+2
-                # We will also zero-pad for now (edges denoted [-1,-1]) to keep fixed-size arrays
-                
-                if self.Laman_construction == 'naive':
-                    if N < self.N_max-1: 
-                        if N < len(subjets)-1: 
-                            angle = subjets[N].delta_R(subjets[N+1])
-                            edges_list.append(np.array([N, N+1])) #in order to know to which pair the angle's list entry corresponds to 
-                            angles_list.append(angle)
-                        else:
-                            edges_list.append(np.array([-1, -1]))
-                            angles_list.append(0)
+                    # Henneberg construction using Type 1 connections
+                    # To start, let's just build based on pt ordering
+                    # A simple construction is to have each node N connected to nodes N+1,N+2
+                    # We will also zero-pad for now (edges denoted [-1,-1]) to keep fixed-size arrays
 
-                    if N < self.N_max-2: 
-                        if N < len(subjets)-2:
-                            angle = subjets[N].delta_R(subjets[N+2])
-                            edges_list.append(np.array([N, N+2]))
-                            angles_list.append(angle) 
-                        else:
-                            edges_list.append(np.array([-1, -1]))
-                            angles_list.append(0)
-
-                elif self.Laman_construction == '1N':
-                    if N == 0:
-                        for i in range(self.N_max-1): # Because we want to start from i=1 
-                            if i < len(subjets)-1:
-                                angle = subjets[0].delta_R(subjets[i+1])
-                                edges_list.append(np.array([0, i+1])) #in order to know to which pair the angle's list entry corresponds to 
+                    if self.Laman_construction == 'naive':
+                        if N < N_cluster-1: 
+                            if N < len(subjets)-1: 
+                                angle = subjets[N].delta_R(subjets[N+1])
+                                edges_list.append(np.array([N, N+1])) #in order to know to which pair the angle's list entry corresponds to 
                                 angles_list.append(angle)
                             else:
-                                edges_list.append(np.array([0, -1]))
+                                edges_list.append(np.array([-1, -1]))
                                 angles_list.append(0)
+
+                        if N < N_cluster-2:
+                            if N < len(subjets)-2:
+                                angle = subjets[N].delta_R(subjets[N+2])
+                                edges_list.append(np.array([N, N+2]))
+                                angles_list.append(angle) 
+                            else:
+                                edges_list.append(np.array([-1, -1]))
+                                angles_list.append(0)
+
+                    elif self.Laman_construction == '1N':
+                        if N == 0:
+                            for i in range(N_cluster-1): # Because we want to start from i=1 
+                                if i < len(subjets)-1:
+                                    angle = subjets[0].delta_R(subjets[i+1])
+                                    edges_list.append(np.array([0, i+1])) #in order to know to which pair the angle's list entry corresponds to 
+                                    angles_list.append(angle)
+                                else:
+                                    edges_list.append(np.array([0, -1]))
+                                    angles_list.append(0)
                                
-                    elif N < self.N_max-1:
-                        if N < len(subjets)-1:
-                            angle = subjets[N].delta_R(subjets[N+1])
-                            edges_list.append(np.array([N, N+1]))
-                            angles_list.append(angle) 
-                        else:
-                            edges_list.append(np.array([-1, -1]))
-                            angles_list.append(0)
-
-                elif self.Laman_construction == '1N2N':
-                    if N == 0:
-                        for i in range(len(subjets)-1): # Because we want to start from i=1
-                            if i < len(subjets)-1:
-                                angle = subjets[0].delta_R(subjets[i+1])
-                                edges_list.append(np.array([0, i+1])) #in order to know to which pair the angle's list entry corresponds to 
-                                angles_list.append(angle)
+                        elif N < N_cluster-1:
+                            if N < len(subjets)-1:
+                                angle = subjets[N].delta_R(subjets[N+1])
+                                edges_list.append(np.array([N, N+1]))
+                                angles_list.append(angle) 
                             else:
-                                edges_list.append(np.array([0, -1]))
+                                edges_list.append(np.array([-1, -1]))
                                 angles_list.append(0)
-                    elif N == 1:
-                        for i in range(len(subjets)-2): # Because we want to start from i=2
-                            if i < len(subjets)-2:
-                                angle = subjets[1].delta_R(subjets[i+2])
-                                edges_list.append(np.array([1, i+2])) #in order to know to which pair the angle's list entry corresponds to 
-                                angles_list.append(angle)
-                            else:
-                                edges_list.append(np.array([1, -1]))
-                                angles_list.append(0)         
-                else:
-                    sys.exit(f'Wrong Laman Construction Algorithm.')
-                    
+
+                    elif self.Laman_construction == '1N2N':
+                        if N == 0:
+                            for i in range(len(subjets)-1): # Because we want to start from i=1
+                                if i < len(subjets)-1:
+                                    angle = subjets[0].delta_R(subjets[i+1])
+                                    edges_list.append(np.array([0, i+1])) #in order to know to which pair the angle's list entry corresponds to 
+                                    angles_list.append(angle)
+                                else:
+                                    edges_list.append(np.array([0, -1]))
+                                    angles_list.append(0)
+                        elif N == 1:
+                            for i in range(len(subjets)-2): # Because we want to start from i=2
+                                if i < len(subjets)-2:
+                                    angle = subjets[1].delta_R(subjets[i+2])
+                                    edges_list.append(np.array([1, i+2])) #in order to know to which pair the angle's list entry corresponds to 
+                                    angles_list.append(angle)
+                                else:
+                                    edges_list.append(np.array([1, -1]))
+                                    angles_list.append(0)         
+                    else:
+                        sys.exit(f'Wrong Laman Construction Algorithm.')
 
 
 
-            self.output[f'subjet'][f'r{r}_edges'].append(np.array(edges_list))
-            self.output[f'subjet'][f'r{r}_angles'].append(np.array(angles_list))
-            self.output[f'subjet'][f'r{r}_z'].append(np.array(z_list))
-            self.output[f'subjet'][f'r{r}_sub_phi'].append(np.array(subjet_phi_list))
-            self.output[f'subjet'][f'r{r}_sub_rap'].append(np.array(subjet_rap_list))
+            if dataset_choice == 'pythia':
+                    self.output[f'subjet'][f'r{r}_N{N_cluster}_edges'].append(np.array(edges_list))
+                    self.output[f'subjet'][f'r{r}_N{N_cluster}_angles'].append(np.array(angles_list))
+                    self.output[f'subjet'][f'r{r}_N{N_cluster}_z'].append(np.array(z_list))
+                    self.output[f'subjet'][f'r{r}_N{N_cluster}_sub_phi'].append(np.array(subjet_phi_list))
+                    self.output[f'subjet'][f'r{r}_N{N_cluster}_sub_rap'].append(np.array(subjet_rap_list))
+                elif dataset_choice == 'herwig':
+                    self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_edges'].append(np.array(edges_list))
+                    self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_angles'].append(np.array(angles_list))
+                    self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_z'].append(np.array(z_list))
+                    self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_sub_phi'].append(np.array(subjet_phi_list))
+                    self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_sub_rap'].append(np.array(subjet_rap_list))
+                else: 
+                    sys.exit(f'Error: Wrong dataset choice.')
                 
         
         

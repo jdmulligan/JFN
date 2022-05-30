@@ -5,12 +5,13 @@
 #------------------------------------------------------------------
 
 # Some parameters of the q-g dataset
+
 R: 0.4
 pt: [500., 550.]
 y_max: 1.701
 
 # Size of q-g labeled data to load
-n_total: 2100
+n_total: 21
 
 # Nsubjettiness basis
 K_max: 8
@@ -18,11 +19,11 @@ K_max: 8
 # Subjet basis: 'exclusive' or 'inclusive'
 subjet_basis: 'inclusive'
 
-# 1. Exclusive, fixed number of jets; choose njet. Note: using the anti-kt alg. here gives a warning from fastjet
-njet: 6
+# 1. Exclusive, fixed number of jets; It must be in the form of a list . Note: using the anti-kt alg. here gives a warning from fastjet
+njet: [6]
 
-# 2. Inclusive, fixed value for the subjet radius; choose radii r and cutoff N_max
-N_max: 10
+# 2. Inclusive. Fixed value for the subjet radius; It must be in the form of a list. Choose radii r and cutoff N_max
+N_max: [10]
 r: [0.01, 0.1] 
 
 # Clustering Algorithm, The options are: 'kt_algorithm', 'antikt_algorithm' ,'cambridge_algorithm' 
@@ -30,6 +31,9 @@ Clustering_Alg: 'antikt_algorithm'
 
 # Laman Construction, The options are: 'naive' , '1N', '1N2N'
 Laman_construction : 'naive' 
+
+# Load Herwig Dataset for testing. Boolean variable
+Herwig_dataset : 'True'
 
 #------------------------------------------------------------------
 # These parameters are used only in ML analysis
