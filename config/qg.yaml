@@ -11,7 +11,7 @@ pt: [500., 550.]
 y_max: 1.701
 
 # Size of q-g labeled data to load
-n_total: 21
+n_total: 2100
 
 # Nsubjettiness basis
 K_max: 8
@@ -53,7 +53,7 @@ g_label: 'gluon'                                    # label 0
 K: [8]
 
 # Select model: pfn, sub_pfn, efn, particle_gnn, sub_dnn, laman_dnn, nsub_dnn, nsub_linear
-models: [particle_gnn]
+models: [sub_pfn]
 
 pfn:
 
@@ -136,4 +136,3 @@ nsub_linear:
     # Hyperparameter tuning
     n_iter: 10                                      # number of random hyperparameter sets to try
     cv: 5                                           # number of cross-validation folds
-

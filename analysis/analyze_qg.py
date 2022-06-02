@@ -71,10 +71,7 @@ class AnalyzeQG(common_base.CommonBase):
             self.N_list = hf['N_list'][:]
             self.beta_list = hf['beta_list'][:]
             self.r_list = hf['r_list'][:]
-            self.N_max_list =  np.array(hf['N_max'][:])
-            self.n_total_list =  np.array(hf['n_total'][:])
-            self.Clustering_Alg = hf['Clustering_Alg']
-            self.Laman_construction = hf['Laman_construction']
+            
 
 
         # We require njet and Nmax are a list 

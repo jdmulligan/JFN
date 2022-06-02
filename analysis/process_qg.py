@@ -100,7 +100,7 @@ class ProcessQG(common_base.CommonBase):
             print(f'Changing N_max into a list')
             self.N_max_list = list([self.N_max_list])
 
-         if self.subjet_basis == 'exclusive':
+        if self.subjet_basis == 'exclusive':
             if self.r_list != [0.4]:
                     print('ERROR: Wrong subjet radius r. For exlusive basis we need r = 0.4')
                     print('Changing radius to r = 0.4')
@@ -431,19 +431,19 @@ class ProcessQG(common_base.CommonBase):
 
 
             if dataset_choice == 'pythia':
-                    self.output[f'subjet'][f'r{r}_N{N_cluster}_edges'].append(np.array(edges_list))
-                    self.output[f'subjet'][f'r{r}_N{N_cluster}_angles'].append(np.array(angles_list))
-                    self.output[f'subjet'][f'r{r}_N{N_cluster}_z'].append(np.array(z_list))
-                    self.output[f'subjet'][f'r{r}_N{N_cluster}_sub_phi'].append(np.array(subjet_phi_list))
-                    self.output[f'subjet'][f'r{r}_N{N_cluster}_sub_rap'].append(np.array(subjet_rap_list))
-                elif dataset_choice == 'herwig':
-                    self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_edges'].append(np.array(edges_list))
-                    self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_angles'].append(np.array(angles_list))
-                    self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_z'].append(np.array(z_list))
-                    self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_sub_phi'].append(np.array(subjet_phi_list))
-                    self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_sub_rap'].append(np.array(subjet_rap_list))
-                else: 
-                    sys.exit(f'Error: Wrong dataset choice.')
+                self.output[f'subjet'][f'r{r}_N{N_cluster}_edges'].append(np.array(edges_list))
+                self.output[f'subjet'][f'r{r}_N{N_cluster}_angles'].append(np.array(angles_list))
+                self.output[f'subjet'][f'r{r}_N{N_cluster}_z'].append(np.array(z_list))
+                self.output[f'subjet'][f'r{r}_N{N_cluster}_sub_phi'].append(np.array(subjet_phi_list))
+                self.output[f'subjet'][f'r{r}_N{N_cluster}_sub_rap'].append(np.array(subjet_rap_list))
+            elif dataset_choice == 'herwig':
+                self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_edges'].append(np.array(edges_list))
+                self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_angles'].append(np.array(angles_list))
+                self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_z'].append(np.array(z_list))
+                self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_sub_phi'].append(np.array(subjet_phi_list))
+                self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_sub_rap'].append(np.array(subjet_rap_list))
+            else: 
+                sys.exit(f'Error: Wrong dataset choice.')
                 
         
         
