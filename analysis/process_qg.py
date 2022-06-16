@@ -100,6 +100,11 @@ class ProcessQG(common_base.CommonBase):
             print(f'Changing N_max into a list')
             self.N_max_list = list([self.N_max_list])
 
+
+        # Clustering Algorithm 
+        self.Clustering_Alg = config['Clustering_Alg']
+
+
         if self.subjet_basis == 'exclusive':
             if self.r_list != [0.4]:
                     print('ERROR: Wrong subjet radius r. For exlusive basis we need r = 0.4')
@@ -108,9 +113,8 @@ class ProcessQG(common_base.CommonBase):
                     time.sleep(2)
             if self.Clustering_Alg == 'antikt_algorithm':
                 sys.exit(f'ERROR: For the exclusive algorithm we can not use antikt_algorithm (fastjet throws a warning)')
+                
 
-        # Clustering Algorithm 
-        self.Clustering_Alg = config['Clustering_Alg']
 
         # Laman Construction
         self.Laman_construction = config['Laman_construction']
@@ -198,21 +202,26 @@ class ProcessQG(common_base.CommonBase):
         print('Finding jets and computing N-subjettiness and subjets...')
         result = [self.analyze_event(fj_particles, 'pythia') for fj_particles in self.df_fjparticles]
         
+
         if self.Herwig_dataset == 'True':
-           result = [self.analyze_event(fj_particles, 'herwig') for fj_particles in self.df_fjparticles_herwig]
+            result = [self.analyze_event(fj_particles, 'herwig') for fj_particles in self.df_fjparticles_herwig]
+            
+
+        
         
         # Transform the dictionary of lists into a dictionary of numpy arrays
         self.output_numpy = {}
         for key,value in self.output.items():
             self.output_numpy[key] = self.transform_to_numpy(value)
+
         
         # Reformat output for ML algorithms (array with 1 array per jet which contain all N-subjettiness values)
         self.output_final = {}
         self.output_final['nsub'] = np.array([list(self.output_numpy['nsub'].values())])[0].T
+        
         for key,val in self.output_numpy['subjet'].items():
             self.output_final[f'subjet_{key}'] = val
             print(key)
-
 
         # Write jet arrays to file
         with h5py.File(os.path.join(self.output_dir, 'subjets_unshuffled.h5'), 'w') as hf:
@@ -287,23 +296,30 @@ class ProcessQG(common_base.CommonBase):
     #---------------------------------------------------------------
     def analyze_jets(self, jet_selected, dataset_choice):
 
-        self.fill_nsubjettiness(jet_selected)
+        self.fill_nsubjettiness(jet_selected, dataset_choice)
         self.fill_subjets(jet_selected, dataset_choice)
         self.fill_qa(jet_selected)
 
     #---------------------------------------------------------------
     # Compute Nsubjettiness of jet
     #---------------------------------------------------------------
-    def fill_nsubjettiness(self, jet):
+    def fill_nsubjettiness(self, jet, dataset_choice):
 
         axis_definition = fjcontrib.KT_Axes()
         for i,N in enumerate(self.N_list):
+            
             beta = self.beta_list[i]
-        
             measure_definition = fjcontrib.UnnormalizedMeasure(beta)
             n_subjettiness_calculator = fjcontrib.Nsubjettiness(N, axis_definition, measure_definition)
             n_subjettiness = n_subjettiness_calculator.result(jet)/jet.pt()
             self.output['nsub'][f'N{N}_beta{beta}'].append(n_subjettiness)
+
+            if dataset_choice =='Herwig':
+                beta = self.beta_list[i]
+                measure_definition = fjcontrib.UnnormalizedMeasure(beta)
+                n_subjettiness_calculator = fjcontrib.Nsubjettiness(N, axis_definition, measure_definition)
+                n_subjettiness = n_subjettiness_calculator.result(jet)/jet.pt()
+                self.output['nsub_herwig'][f'N{N}_beta{beta}'].append(n_subjettiness)
 
     #---------------------------------------------------------------
     # Compute subjet kinematics...
@@ -430,20 +446,20 @@ class ProcessQG(common_base.CommonBase):
 
 
 
-            if dataset_choice == 'pythia':
-                self.output[f'subjet'][f'r{r}_N{N_cluster}_edges'].append(np.array(edges_list))
-                self.output[f'subjet'][f'r{r}_N{N_cluster}_angles'].append(np.array(angles_list))
-                self.output[f'subjet'][f'r{r}_N{N_cluster}_z'].append(np.array(z_list))
-                self.output[f'subjet'][f'r{r}_N{N_cluster}_sub_phi'].append(np.array(subjet_phi_list))
-                self.output[f'subjet'][f'r{r}_N{N_cluster}_sub_rap'].append(np.array(subjet_rap_list))
-            elif dataset_choice == 'herwig':
-                self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_edges'].append(np.array(edges_list))
-                self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_angles'].append(np.array(angles_list))
-                self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_z'].append(np.array(z_list))
-                self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_sub_phi'].append(np.array(subjet_phi_list))
-                self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_sub_rap'].append(np.array(subjet_rap_list))
-            else: 
-                sys.exit(f'Error: Wrong dataset choice.')
+                if dataset_choice == 'pythia':
+                    self.output[f'subjet'][f'r{r}_N{N_cluster}_edges'].append(np.array(edges_list))
+                    self.output[f'subjet'][f'r{r}_N{N_cluster}_angles'].append(np.array(angles_list))
+                    self.output[f'subjet'][f'r{r}_N{N_cluster}_z'].append(np.array(z_list))
+                    self.output[f'subjet'][f'r{r}_N{N_cluster}_sub_phi'].append(np.array(subjet_phi_list))
+                    self.output[f'subjet'][f'r{r}_N{N_cluster}_sub_rap'].append(np.array(subjet_rap_list))
+                elif dataset_choice == 'herwig':
+                    self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_edges'].append(np.array(edges_list))
+                    self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_angles'].append(np.array(angles_list))
+                    self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_z'].append(np.array(z_list))
+                    self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_sub_phi'].append(np.array(subjet_phi_list))
+                    self.output[f'subjet'][f'herwig_r{r}_N{N_cluster}_sub_rap'].append(np.array(subjet_rap_list))
+                else: 
+                    sys.exit(f'Error: Wrong dataset choice.')
                 
         
         

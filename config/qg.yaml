@@ -11,20 +11,20 @@ pt: [500., 550.]
 y_max: 1.701
 
 # Size of q-g labeled data to load
-n_total: 2100
+n_total: 500
 
 # Nsubjettiness basis
-K_max: 8
+K_max: 2
 
 # Subjet basis: 'exclusive' or 'inclusive'
 subjet_basis: 'inclusive'
 
 # 1. Exclusive, fixed number of jets; It must be in the form of a list . Note: using the anti-kt alg. here gives a warning from fastjet
-njet: [6]
+njet: [10]
 
 # 2. Inclusive. Fixed value for the subjet radius; It must be in the form of a list. Choose radii r and cutoff N_max
-N_max: [10]
-r: [0.01, 0.1] 
+N_max: [30]
+r: [0.1]
 
 # Clustering Algorithm, The options are: 'kt_algorithm', 'antikt_algorithm' ,'cambridge_algorithm' 
 Clustering_Alg: 'antikt_algorithm' 
@@ -33,16 +33,16 @@ Clustering_Alg: 'antikt_algorithm'
 Laman_construction : 'naive' 
 
 # Load Herwig Dataset for testing. Boolean variable
-Herwig_dataset : 'True'
+Herwig_dataset : 'False'
 
 #------------------------------------------------------------------
 # These parameters are used only in ML analysis
 #------------------------------------------------------------------
 
 # Size of q-g labeled data to load
-n_train: 1500
-n_val: 300
-n_test: 300
+n_train: 400
+n_val:   50
+n_test:  50
 
 # Classification labels
 q_label: 'quark'                                    # label 1
@@ -50,10 +50,10 @@ g_label: 'gluon'                                    # label 0
 
 # Define Nsubjettiness observable basis sets to train models
 # The K-body phase space is (3K-4)-dimensional
-K: [8]
+K: [2]
 
 # Select model: pfn, sub_pfn, efn, particle_gnn, sub_dnn, laman_dnn, nsub_dnn, nsub_linear
-models: [sub_pfn]
+models: [particle_gnn]
 
 pfn:
 
@@ -89,8 +89,8 @@ efn:
     batch_size: 500
 
 particle_gnn:
-    epochs: 2
-    batch_size: 64
+    epochs: 10
+    batch_size: 128
 
 sub_dnn:
 

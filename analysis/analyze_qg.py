@@ -41,13 +41,69 @@ import keras_tuner
 import torch
 import torch_geometric
 import networkx
-import GCN
+#import GCN
+from torch_geometric.nn import GCNConv, GATConv, global_mean_pool
+import torch.nn.functional as F
+from torch.nn import Linear
+
 os.environ['TORCH'] = torch.__version__
 print(torch.__version__)
 
 # Base class
 sys.path.append('.')
 from base import common_base
+
+
+##################################################################
+    
+class GCN_class(torch.nn.Module):
+    def __init__(self,graph_batch, hidden_channels):
+        super(GCN_class,self).__init__()
+        self.conv1 = GCNConv(graph_batch.num_features, hidden_channels)
+        self.conv2 = GCNConv(hidden_channels, hidden_channels)
+        self.lin = Linear(hidden_channels,2)
+
+    def forward(self, x, edge_index, batch):
+
+        #x = F.dropout(x, p=0.5, training = self.training)
+        x = self.conv1(x, edge_index)
+        x = x.relu()
+        x = self.conv2(x, edge_index)
+
+        x = global_mean_pool(x, batch)
+
+        #x = F.dropout(x, p=0.5, training = self.training)
+        x = self.lin(x)
+
+        return x 
+
+##################################################################
+    
+class GAT_class(torch.nn.Module):
+    def __init__(self, graph_batch, hidden_channels, heads, edge_dimension, edge_attributes):
+        super(GAT_class,self).__init__()
+        self.conv1 = GATConv(graph_batch.num_features, hidden_channels, heads, edge_dim = edge_dimension)
+        self.conv2 = GATConv(hidden_channels*heads, hidden_channels, heads, edge_dim = edge_dimension)
+        #self.conv3 = GATConv(hidden_channels*heads, hidden_channels, heads, edge_dim = edge_dimension)
+        self.lin = Linear(hidden_channels*heads, 2)
+
+    def forward(self, x, edge_index, batch, edge_attributes):
+
+        #x = F.dropout(x, p=0.4, training = self.training)
+        x = self.conv1(x, edge_index, edge_attr = edge_attributes )
+        x = x.relu()
+        x = self.conv2(x, edge_index, edge_attr = edge_attributes )
+        #x = x.relu()
+        #x = self.conv3(x,edge_index,edge_attr = edge_attributes )
+
+        x = global_mean_pool(x, batch)
+
+        #x = F.dropout(x, p=0.4, training = self.training)
+        x = self.lin(x)
+
+        return x 
+
+
 
 ################################################################
 class AnalyzeQG(common_base.CommonBase):
@@ -220,6 +276,7 @@ class AnalyzeQG(common_base.CommonBase):
 
             self.y_total = hf[f'y'][:]
             X_Nsub_total = hf[f'nsub'][:] 
+            #X_Nsub_total_herwig = hf[f'nsub_herwig'][:] 
 
 
             self.subjet_input_total={}
@@ -231,6 +288,7 @@ class AnalyzeQG(common_base.CommonBase):
                     self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_sub_phi'] = hf[f'subjet_r{r}_N{N_cluster}_sub_phi'][:]
                     self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_sub_rap'] = hf[f'subjet_r{r}_N{N_cluster}_sub_rap'][:]
 
+                    
                     if self.Herwig_dataset == 'True':
                         self.y_herwig_total = hf[f'y_herwig'][:]
                         self.subjet_input_total[f'subjet_herwig_r{r}_N{N_cluster}_angles'] = hf[f'subjet_herwig_r{r}_N{N_cluster}_angles'][:]
@@ -238,7 +296,7 @@ class AnalyzeQG(common_base.CommonBase):
                         self.subjet_input_total[f'subjet_herwig_r{r}_N{N_cluster}_sub_phi'] = hf[f'subjet_herwig_r{r}_N{N_cluster}_sub_phi'][:]
                         self.subjet_input_total[f'subjet_herwig_r{r}_N{N_cluster}_sub_rap'] = hf[f'subjet_herwig_r{r}_N{N_cluster}_sub_rap'][:]
 
-
+           
             # Check whether any training entries are empty
             [print(f'WARNING: input entry {i} is empty') for i,x in enumerate(X_Nsub_total) if not x.any()]                                          
 
@@ -329,7 +387,7 @@ class AnalyzeQG(common_base.CommonBase):
             self.feature_labels.append(r'$\tau_{}^{{{}}}$'.format(N,beta))
 
         # Split into training and test sets
-        # We will split into validatation sets (for tuning hyperparameters) separately for each model
+        # We will split into validation sets (for tuning hyperparameters) separately for each model
         X_Nsub_train, X_Nsub_test, self.y_train, self.y_test = sklearn.model_selection.train_test_split(self.X_Nsub, self.y, test_size=self.test_frac)
         test_jets = int(self.y_test.size)
         test_jets_q = int(np.sum(self.y_test))
@@ -494,7 +552,20 @@ class AnalyzeQG(common_base.CommonBase):
         Y = y
 
         # Initialize list of graphs
-        graph_list = []
+        
+        graph_list = {}
+        graph_list_fullycon = []
+        coo_laman = {}
+        coo_laman_del = {}
+        edge_indices_laman = {}
+        edge_indices_laman_long = {} 
+        graph_batch = {}
+        node_features_laman = {}
+        edge_attr_laman = {}
+        edge_attr_laman_del = {}
+        for r in self.r_list:
+                for N in self.N_cluster_list:
+                    graph_list[f'subjet_r{r}_N{N}'] = []
 
         # Loop over all jets
         for i, xp in enumerate(X):
@@ -505,16 +576,18 @@ class AnalyzeQG(common_base.CommonBase):
             node_features = torch.tensor(xp,dtype=torch.float)
 
             # 2. Get adjacency matrix / edge indices
-            #    For now let's use a fully connected graph 
+            
+            # Fully connected graph 
             adj_matrix = np.ones((xp.shape[0],xp.shape[0])) - np.identity((xp.shape[0]))
             row, col = np.where(adj_matrix)
-
-            #    Use sparse COO format
+            
+            # Use sparse COO format
             coo = np.array(list(zip(row,col)))
 
             #    Switch format
+            
             edge_indices = torch.tensor(coo)
-            edge_indices_full_conn = edge_indices.t().to(torch.long).view(2, -1) #long .. ?!
+            edge_indices_long = edge_indices.t().to(torch.long).view(2, -1) #long .. ?!
 
             #    or can use this directly: edge_indices_full_conn = torch.tensor([row,col],dtype=torch.long) 
 
@@ -524,13 +597,50 @@ class AnalyzeQG(common_base.CommonBase):
             graph_label = torch.tensor(Y[i],dtype=torch.int64)
 
             # 5. Create PyG data object
-            graph = torch_geometric.data.Data(x=node_features, edge_index=edge_indices_full_conn, edge_attr=None, y=graph_label) 
+            graph = torch_geometric.data.Data(x=node_features, edge_index=edge_indices_long, edge_attr=None, y=graph_label) 
+            
 
             # 6. Add to list of graphs
-            graph_list.append(graph)
+            graph_list_fullycon.append(graph)
+
+
+            # Laman Graph
+            for r in self.r_list:
+                for N in self.N_cluster_list:
+                    coo_laman[f'subjet_r{r}_N{N}'] = self.subjet_input_total[f'subjet_r{r}_N{N}_edges'][i,:,:]
+                    row, col = np.where(coo_laman[f'subjet_r{r}_N{N}'] ==-1)
+                    
+                    # Number of subjets 
+                    n = np.int((row[0] + 3)/2)
+                    
+                    # Removing the zero-padding 
+                    coo_laman_del[f'subjet_r{r}_N{N}'] = np.delete(coo_laman[f'subjet_r{r}_N{N}'],row,0)
+                    node_features_laman[f'subjet_r{r}_N{N}'] = torch.tensor(self.subjet_input_total[f'subjet_r{r}_N{N}_z'][i,:n],dtype=torch.float)
+                    node_features_laman[f'subjet_r{r}_N{N}'] = node_features_laman[f'subjet_r{r}_N{N}'].reshape(-1,1)
+                    
+
+                  #  if np.array(coo_laman_del[f'subjet_r{r}_N{N}']).shape != np.array(coo_laman[f'subjet_r{r}_N{N}']).shape:
+                   #     print(i)
+
+                    edge_indices_laman[f'subjet_r{r}_N{N}'] = torch.tensor(coo_laman_del[f'subjet_r{r}_N{N}'])
+                    edge_indices_laman_long[f'subjet_r{r}_N{N}'] = edge_indices_laman[f'subjet_r{r}_N{N}'].t().to(torch.long).view(2, -1) #long .. ?!
+
+                    edge_attr_laman[f'subjet_r{r}_N{N}'] = torch.tensor(self.subjet_input_total[f'subjet_r{r}_N{N}_angles'][i,:],dtype=torch.float).reshape(-1,1)  
+
+                    edge_attr_laman_del[f'subjet_r{r}_N{N}'] = np.delete(edge_attr_laman[f'subjet_r{r}_N{N}'],row,0)
+
+
+                    graph_label = torch.tensor(Y[i],dtype=torch.int64)
+
+                    graph = torch_geometric.data.Data(x=node_features_laman[f'subjet_r{r}_N{N}'], edge_index=edge_indices_laman_long[f'subjet_r{r}_N{N}'], edge_attr=edge_attr_laman_del[f'subjet_r{r}_N{N}'], y=graph_label) 
+
+
+                    graph_list[f'subjet_r{r}_N{N}'].append(graph)
+               
 
         # 7. Create PyG batch object that contains all the graphs and labels
-        graph_batch = torch_geometric.data.Batch().from_data_list(graph_list)
+        graph_batch = torch_geometric.data.Batch().from_data_list(graph_list_fullycon)
+        
 
         # Print
         print(f'Number of graphs in PyG batch object: {graph_batch.num_graphs}')
@@ -554,7 +664,6 @@ class AnalyzeQG(common_base.CommonBase):
 
         # Check a few things .. 
         # 1. Graph batch
-        print(f'Number of graphs: {len(graph_batch)}') # wrong number??
         print(f'Number of graphs: {graph_batch.num_graphs}') # correct number ...??
         print(f'Number of features: {graph_batch.num_features}') # ok
         print(f'Number of node features: {graph_batch.num_node_features}') # ok
@@ -576,59 +685,136 @@ class AnalyzeQG(common_base.CommonBase):
         print(f'Number of test graphs: {len(test_dataset)}')
 
         # Group graphs into mini-batches for parallelization (..?)
-        train_loader = torch_geometric.loader.DataLoader(train_dataset, batch_size=model_settings['batch_size'], shuffle=True)
-        test_loader = torch_geometric.loader.DataLoader(test_dataset, batch_size=model_settings['batch_size'], shuffle=False)
-
-        for step, data in enumerate(train_loader):
-            print(f'Step {step + 1}:')
-            print('=======')
-            print(f'Number of graphs in the current batch: {data.num_graphs}')
-            print(data)
-            print()
+      #  train_loader = torch_geometric.loader.DataLoader(train_dataset, batch_size=model_settings['batch_size'], shuffle=True)
+       # test_loader = torch_geometric.loader.DataLoader(test_dataset, batch_size=model_settings['batch_size'], shuffle=False)
 
         # Set up GNN structure
         # 1. Embed each node by performing multiple rounds of message passing
         # 2. Aggregate node embeddings into a unified graph embedding (readout layer)
         # 3. Train a final classifier on the graph embedding
-        gnn_model = GCN.GCN(graph_batch, hidden_channels=64)
-        print(gnn_model)
+        
+        #gnn_model = GCN_class(graph_batch, hidden_channels = 64)  # TO DO: In order to train this model with the Laman w/ edge_attr we need to add a new train_gnn -> 
+        #print(gnn_model)
 
-        # Now train the GNN
-        optimizer = torch.optim.Adam(gnn_model.parameters(), lr=0.01)
-        criterion = torch.nn.CrossEntropyLoss()
+        # Now train the fully connected GNN
+       # optimizer = torch.optim.Adam(gnn_model.parameters(), lr=0.001)
+        #criterion = torch.nn.CrossEntropyLoss()
 
-        for epoch in range(1, model_settings['epochs']): # -> 171
-            self.train_gnn(train_loader, gnn_model, optimizer, criterion)
-            train_acc = self.test_gnn(test_loader, gnn_model)
-            test_acc = self.test_gnn(test_loader, gnn_model)
-            print(f'Epoch: {epoch:03d}, Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}')
+        #for epoch in range(1, model_settings['epochs']): # -> 171
+         #   self.train_gnn(train_loader, gnn_model, optimizer, criterion)
+          #  train_acc = self.test_gnn(train_loader, gnn_model)
+           # test_acc = self.test_gnn(test_loader, gnn_model)
+           # print(f'Epoch: {epoch:02d}, Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}')
 
-        # Get AUC & ROC curve
-        for i, datatest in enumerate(test_loader):  # Iterate in batches over the test dataset.
-            pred_graph = gnn_model(datatest.x, datatest.edge_index, datatest.batch).data # '.data' removes the 'grad..' from the torch tensor
-            pred_graph = pred_graph.numpy() # Convert predictions to np.array. Not: values not in [0,1]
-            label_graph = datatest.y.numpy() # Get labels
+        # Get AUC & ROC curve for the fully connected GNN
+      #  for i, datatest in enumerate(test_loader):  # Iterate in batches over the test dataset.
+       #     pred_graph = gnn_model(datatest.x, datatest.edge_index, datatest.batch).data # '.data' removes the 'grad..' from the torch tensor
+        #    pred_graph = pred_graph.numpy() # Convert predictions to np.array. Not: values not in [0,1]
+         #   label_graph = datatest.y.numpy() # Get labels
 
-            if i==0:
-                pred_graphs = pred_graph
-                label_graphs = label_graph
-            else:
-                pred_graphs = np.concatenate((pred_graphs,pred_graph),axis=0)
-                label_graphs = np.concatenate((label_graphs,label_graph),axis=0)
+          #  if i==0:
+           #     pred_graphs = pred_graph
+            #    label_graphs = label_graph
+            #else:
+             #   pred_graphs = np.concatenate((pred_graphs,pred_graph),axis=0)
+              #  label_graphs = np.concatenate((label_graphs,label_graph),axis=0)
 
         # get AUC
-        gnn_auc = sklearn.metrics.roc_auc_score(label_graphs, pred_graphs[:,1])
-        print(f'Fully connected GNN AUC based on particle four-vectors is: {gnn_auc}')
+      #  gnn_auc = sklearn.metrics.roc_auc_score(label_graphs, pred_graphs[:,1])
+       # print(f'Fully connected GNN AUC based on particle four-vectors is: {gnn_auc}')
 
-        # get ROC curve
-        self.roc_curve_dict[model] = sklearn.metrics.roc_curve(label_graphs, pred_graphs[:,1])
+        # get ROC curve for the fully connected GNN
+        #self.roc_curve_dict[model] = sklearn.metrics.roc_curve(label_graphs, pred_graphs[:,1])
 
+        for r in self.r_list:
+                for N in self.N_cluster_list:
+                    
+                    graph_batch[f'subjet_r{r}_N{N}'] = torch_geometric.data.Batch().from_data_list(graph_list[f'subjet_r{r}_N{N}'])
+                    graph_batch = graph_batch[f'subjet_r{r}_N{N}']
+
+                    # Print
+                    print(f'Number of graphs in PyG batch object: {graph_batch.num_graphs}')
+                    print(f'Graph batch structure: {graph_batch}') # It says "DataDataBatch" .. correct?
+
+           
+                    # Visualize one of the jet graphs as an example ...
+
+                    vis = torch_geometric.utils.convert.to_networkx(graph_batch[3],to_undirected=True) #... undirected graph?
+                    plt.figure(1,figsize=(10,10))
+                    networkx.draw(vis,cmap=plt.get_cmap('Set2'),node_size=10,linewidths=6)
+                    plt.savefig(os.path.join(self.output_dir, 'jet_graph.pdf'))
+                    plt.close()
+
+                    # Check adjacency of the first jet
+                    print()
+                    print(f'adjacency of first jet: {graph_batch[0].edge_index}')
+                    print()
+
+                    # Check a few things .. 
+                    # 1. Graph batch
+                    print(f'Number of graphs: {graph_batch.num_graphs}') # ok
+                    print(f'Number of features: {graph_batch.num_features}') # ok
+                    print(f'Number of node features: {graph_batch.num_node_features}') # ok
+                    print(f'Number of edge features: {graph_batch.num_edge_features}') # ok
+
+                    #print(f'Number of classes: {graph_batch.num_classes}') # .. labels?? print(graph_batch.y)
+
+                    # Shuffle and split into training and test set
+                    #graph_batch = graph_batch.shuffle() # seems like I have the wrong format ...
+
+                    train_dataset = graph_batch[:self.n_train] # ok ...
+                    test_dataset = graph_batch[self.n_train:]
+
+                    print(f'Number of training graphs: {len(train_dataset)}') # now ok, doesn't work for graph_batch ...?
+                    print(f'Number of test graphs: {len(test_dataset)}')
+
+                    # Group graphs into mini-batches for parallelization (..?)
+                    train_loader = torch_geometric.loader.DataLoader(train_dataset, batch_size=model_settings['batch_size'], shuffle=True)
+                    test_loader = torch_geometric.loader.DataLoader(test_dataset, batch_size=model_settings['batch_size'], shuffle=False)
+
+       
+                    # Set up GNN structure
+                    # 1. Embed each node by performing multiple rounds of message passing
+                    # 2. Aggregate node embeddings into a unified graph embedding (readout layer)
+                    # 3. Train a final classifier on the graph embedding
+                    gnn_model = GAT_class(graph_batch, hidden_channels = 8, heads = 8, edge_dimension = 1, edge_attributes = graph_batch.edge_attr)
+                    print(gnn_model)
+
+                    # Now train the GNN
+                    optimizer = torch.optim.Adam(gnn_model.parameters(), lr=0.001)
+                    criterion = torch.nn.CrossEntropyLoss()
+
+                    for epoch in range(1, model_settings['epochs'] + 1): # -> 171
+                        self.train_gnn(train_loader, gnn_model, optimizer, criterion)
+                        train_acc = self.test_gnn(train_loader, gnn_model)
+                        test_acc = self.test_gnn(test_loader, gnn_model)
+                        print(f'Epoch: {epoch:02d}, Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}')
+
+                    # Get AUC & ROC curve
+                    for i, datatest in enumerate(test_loader):  # Iterate in batches over the test dataset.
+                        pred_graph = gnn_model(datatest.x, datatest.edge_index, datatest.batch, datatest.edge_attr).data # '.data' removes the 'grad..' from the torch tensor
+                        pred_graph = pred_graph.numpy() # Convert predictions to np.array. Not: values not in [0,1]
+                        label_graph = datatest.y.numpy() # Get labels
+
+                        if i==0:
+                            pred_graphs = pred_graph
+                            label_graphs = label_graph
+                        else:
+                            pred_graphs = np.concatenate((pred_graphs,pred_graph),axis=0)
+                            label_graphs = np.concatenate((label_graphs,label_graph),axis=0)
+
+                    # get AUC
+                    gnn_auc = sklearn.metrics.roc_auc_score(label_graphs, pred_graphs[:,1])
+                    print(f'Laman GNN with r={r}, N={N} : AUC based on particle four-vectors is: {gnn_auc}')
+
+                    
     #---------------------------------------------------------------
     def train_gnn(self, train_loader, gnn_model, optimizer, criterion):
         gnn_model.train()
 
         for data in train_loader:  # Iterate in batches over the training dataset.
-            out = gnn_model(data.x, data.edge_index, data.batch)  # Perform a single forward pass.
+
+            out = gnn_model(data.x, data.edge_index, data.batch, data.edge_attr)  # Perform a single forward pass.
             loss = criterion(out, data.y)  # Compute the loss.
             loss.backward()  # Derive gradients.
             optimizer.step()  # Update parameters based on gradients.
@@ -640,7 +826,7 @@ class AnalyzeQG(common_base.CommonBase):
 
         correct = 0
         for data in loader:  # Iterate in batches over the training/test dataset.
-            out = gnn_model(data.x, data.edge_index, data.batch)  
+            out = gnn_model(data.x, data.edge_index, data.batch, data.edge_attr)  
             pred = out.argmax(dim=1)  # Use the class with highest probability.
             correct += int((pred == data.y).sum())  # Check against ground-truth labels.
         return correct / len(loader.dataset)  # Derive ratio of correct predictions.
@@ -1075,7 +1261,7 @@ class AnalyzeQG(common_base.CommonBase):
                           Y_PFN_train,
                           epochs=model_settings['epochs'],
                           batch_size=model_settings['batch_size'],
-                          validation_data=(X_PFN_herwig_val, Y_PFN_herwig_val),
+                          validation_data=(X_PFN_val, Y_PFN_val),
                           verbose=1, callbacks =[early_stopping])
             
             history_epochs = len(history.history['loss']) # For the x axis of the plot    
@@ -1209,7 +1395,7 @@ class AnalyzeQG(common_base.CommonBase):
                             Y_PFN_train,
                             epochs=model_settings['epochs'],
                             batch_size=model_settings['batch_size'],
-                            validation_data=(X_PFN_herwig_val, Y_PFN_herwig_val),
+                            validation_data=(X_PFN_val, Y_PFN_val),
                             verbose=1, callbacks =[early_stopping])
 
             history_epochs = len(history.history['loss']) # For the x axis of the plot    
@@ -1657,3 +1843,6 @@ if __name__ == '__main__':
 
     analysis = AnalyzeQG(config_file=args.configFile, output_dir=args.outputDir)
     analysis.analyze_qg()
+
+
+
