@@ -15,16 +15,14 @@ import functools
 import shutil
 import time
 
-# Data analysis and plotting
-import pandas as pd
-import numpy as np
-from matplotlib import pyplot as plt
-import seaborn as sns
-sns.set_context('paper', rc={'font.size':18,'axes.titlesize':18,'axes.labelsize':18})
-
-# Energy flow package
-import energyflow
-import energyflow.archs
+# Pytorch
+import torch
+import torch_geometric
+import networkx
+#import GCN
+from torch_geometric.nn import GCNConv, GATConv, global_mean_pool
+import torch.nn.functional as F
+from torch.nn import Linear
 
 # sklearn
 import sklearn
@@ -37,30 +35,20 @@ import sklearn.pipeline
 from tensorflow import keras
 import keras_tuner
 
-# Pytorch
-import torch
-import torch_geometric
-import networkx
-#import GCN
-from torch_geometric.nn import GCNConv, GATConv, global_mean_pool
-import torch.nn.functional as F
-from torch.nn import Linear
+# Energy flow package
+import energyflow
+import energyflow.archs
 
-os.environ['TORCH'] = torch.__version__
-print(torch.__version__)
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print('Using device:', device)
-print()
-if device.type == 'cuda':
-    print(torch.cuda.get_device_name(0))
-    print('Memory Usage:')
-    print('Allocated:', round(torch.cuda.memory_allocated(0)/1024**3,1), 'GB')
-    print('Cached:   ', round(torch.cuda.memory_cached(0)/1024**3,1), 'GB')
+# Data analysis and plotting
+import pandas as pd
+import numpy as np
+from matplotlib import pyplot as plt
+import seaborn as sns
+sns.set_context('paper', rc={'font.size':18,'axes.titlesize':18,'axes.labelsize':18})
 
 # Base class
 sys.path.append('.')
 from base import common_base
-
 
 ##################################################################
     
@@ -167,6 +155,19 @@ class AnalyzeQG(common_base.CommonBase):
 
         self.qa_observables = ['jet_pt', 'jet_angularity', 'thrust', 'LHA', 'pTD', 'jet_mass', 'jet_theta_g', 'zg', 'multiplicity_0000', 'multiplicity_0150', 'multiplicity_0500', 'multiplicity_1000']
             
+        # Set torch device
+        os.environ['TORCH'] = torch.__version__
+        print()
+        print(f'pytorch version: {torch.__version__}')
+        self.torch_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print('Using device:', self.torch_device)
+        if self.torch_device.type == 'cuda':
+            print(torch.cuda.get_device_name(0))
+            print('Memory Usage:')
+            print('Allocated:', round(torch.cuda.memory_allocated(0)/1024**3,1), 'GB')
+            print('Cached:   ', round(torch.cuda.memory_reserved(0)/1024**3,1), 'GB')
+        print()
+
         # Remove keras-tuner folder, if it exists
         if os.path.exists('keras_tuner'):
             shutil.rmtree('keras_tuner')
@@ -285,7 +286,6 @@ class AnalyzeQG(common_base.CommonBase):
             self.y_total = hf[f'y'][:]
             X_Nsub_total = hf[f'nsub'][:] 
             #X_Nsub_total_herwig = hf[f'nsub_herwig'][:] 
-
 
             self.subjet_input_total={}
             for r in self.r_list:
@@ -1779,7 +1779,7 @@ class AnalyzeQG(common_base.CommonBase):
             # Add label columns to each df to differentiate them for plotting
             df_q['generator'] = np.repeat(self.q_label, result_q.shape[0])
             df_g['generator'] = np.repeat(self.g_label, result_g.shape[0])
-            df = df_q.append(df_g, ignore_index=True)
+            df = pd.concat([df_q,df_g], ignore_index=True)
 
             # Histplot
             h = sns.histplot(df, x=xlabel, hue='generator', stat=stat, bins=bins, element='step', common_norm=False)
@@ -1806,7 +1806,7 @@ class AnalyzeQG(common_base.CommonBase):
 
         df_q['generator'] = np.repeat(self.q_label, observable_q.shape[0])
         df_g['generator'] = np.repeat(self.g_label, observable_g.shape[0])
-        df = df_q.append(df_g, ignore_index=True)
+        df = pd.concat([df_q,df_g], ignore_index=True)
 
         bins = np.linspace(np.amin(X), np.amax(X), 50)
         stat='density'
