@@ -448,6 +448,7 @@ class AnalyzeQG(common_base.CommonBase):
         self.roc_curve_dict = {}
         for model in self.models:
             self.roc_curve_dict[model] = {}
+            self.roc_curve_dict[f'{model}_herwig'] = {}
                         
         # Plot the input data
         self.plot_QA()
@@ -619,7 +620,10 @@ class AnalyzeQG(common_base.CommonBase):
                     row, col = np.where(coo_laman[f'subjet_r{r}_N{N}'] ==-1)
                     
                     # Number of subjets 
-                    n = np.int((row[0] + 3)/2)
+                    if len(row)!=0:
+                        n = np.int((row[0] + 3)/2)
+                    else:  
+                        n=N
                     
                     # Removing the zero-padding 
                     coo_laman_del[f'subjet_r{r}_N{N}'] = np.delete(coo_laman[f'subjet_r{r}_N{N}'],row,0)
@@ -789,14 +793,14 @@ class AnalyzeQG(common_base.CommonBase):
                     print(gnn_model)
 
                     # Now train the GNN
-                    optimizer = torch.optim.Adam(gnn_model.parameters(), lr=0.001)
+                    optimizer = torch.optim.Adam(gnn_model.parameters(), lr=0.01)
                     criterion = torch.nn.CrossEntropyLoss()
 
                     for epoch in range(1, model_settings['epochs'] + 1): # -> 171
-                        self.train_gnn(train_loader, gnn_model, optimizer, criterion)
+                        loss_train = self.train_gnn(train_loader, gnn_model, optimizer, criterion)
                         train_acc = self.test_gnn(train_loader, gnn_model)
                         test_acc = self.test_gnn(test_loader, gnn_model)
-                        print(f'Epoch: {epoch:02d}, Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}')
+                        print(f'Epoch: {epoch:02d}, Train Loss: {loss_train:.4f},  Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}')
 
                     # Get AUC & ROC curve
                     for i, datatest in enumerate(test_loader):  # Iterate in batches over the test dataset.
@@ -814,19 +818,25 @@ class AnalyzeQG(common_base.CommonBase):
                     # get AUC
                     gnn_auc = sklearn.metrics.roc_auc_score(label_graphs, pred_graphs[:,1])
                     print(f'Laman GNN with r={r}, N={N} : AUC based on particle four-vectors is: {gnn_auc}')
+                    self.AUC[f'{model}'].append(gnn_auc)
 
                     
     #---------------------------------------------------------------
     def train_gnn(self, train_loader, gnn_model, optimizer, criterion):
         gnn_model.train()
 
+        loss_cum=0
+
         for data in train_loader:  # Iterate in batches over the training dataset.
 
             out = gnn_model(data.x, data.edge_index, data.batch, data.edge_attr)  # Perform a single forward pass.
             loss = criterion(out, data.y)  # Compute the loss.
+            loss_cum += loss.item() #Cumulative loss
             loss.backward()  # Derive gradients.
             optimizer.step()  # Update parameters based on gradients.
             optimizer.zero_grad()  # Clear gradients.
+
+        return loss_cum/len(train_loader)
 
     #---------------------------------------------------------------
     def test_gnn(self, loader, gnn_model):
@@ -1286,7 +1296,7 @@ class AnalyzeQG(common_base.CommonBase):
             print('Particle Flow Networks/Deep Sets: AUC = {} (test set Herwig)'.format(auc_PFN))
             self.AUC[f'{model}'].append(auc_PFN)
         
-            self.roc_curve_dict[model] = sklearn.metrics.roc_curve(Y_PFN_herwig_test[:,1], preds_PFN[:,1])
+            self.roc_curve_dict[f'{model}_herwig'] = sklearn.metrics.roc_curve(Y_PFN_herwig_test[:,1], preds_PFN[:,1])
 
 
             # Get predictions on test data using PYTHIA
@@ -1425,7 +1435,7 @@ class AnalyzeQG(common_base.CommonBase):
             elif self.subjet_basis=='inclusive':
                 dim = r 
 
-            self.roc_curve_dict[model][dim] = sklearn.metrics.roc_curve(Y_PFN_herwig_test[:,1], preds_PFN[:,1])
+            self.roc_curve_dict[f'{model}_herwig'][dim] = sklearn.metrics.roc_curve(Y_PFN_herwig_test[:,1], preds_PFN[:,1])
 
             # Get predictions on test data using PYTHIA
 

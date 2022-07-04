@@ -56,8 +56,24 @@ class PlotQG(common_base.CommonBase):
 
         self.models = config['models']
         self.K_list = config['K']
+
+        # Subjet basis
+        self.subjet_basis = config['subjet_basis']
+        self.njet_list = config['njet']
+        self.N_max_list= config['N_max']
         self.r_list = config['r']
         
+        # Clustering Algorithm 
+        self.Clustering_Alg = config['Clustering_Alg']
+
+        # Load Herwig Dataset:
+        self.Herwig_dataset = config['Herwig_dataset']    
+
+        if self.subjet_basis=='exclusive':
+            self.dim_list = self.njet_list
+        elif self.subjet_basis=='inclusive':
+            self.dim_list = self.r_list 
+
     #---------------------------------------------------------------
     # Main processing function
     #---------------------------------------------------------------
@@ -112,6 +128,33 @@ class PlotQG(common_base.CommonBase):
             roc_list['theta_g'] = self.roc_curve_dict['jet_theta_g']
             self.plot_roc_curves(roc_list)
 
+        if 'pfn' in self.models and 'sub_pfn' in self.models:
+            roc_list = {}
+            roc_list['PFN'] = self.roc_curve_dict['pfn']
+            if self.subjet_basis =='exclusive':
+                for N_cluster in self.njet_list:
+                    roc_list[f'JFN (n = {N_cluster})'] = self.roc_curve_dict['sub_pfn'][N_cluster]
+            elif self.subjet_basis =='inclusive':
+                for r in self.r_list:
+                    roc_list[f'JFN (r = {r})'] = self.roc_curve_dict['sub_pfn'][r]
+
+            self.plot_roc_curves(roc_list)
+
+
+            if self.Herwig_dataset =='True':
+                roc_list = {}
+                roc_list['PFN_herwig'] = self.roc_curve_dict['pfn_herwig']
+
+                if self.subjet_basis =='exclusive':
+                    for N_cluster in self.njet_list:
+                        roc_list[f'JFN_herwig (n = {N_cluster})'] = self.roc_curve_dict['sub_pfn_herwig'][N_cluster]
+                elif self.subjet_basis =='inclusive':
+                    for r in self.r_list:
+                        roc_list[f'JFN_herwig (r = {r})'] = self.roc_curve_dict['sub_pfn_herwig'][r]
+
+                self.plot_roc_curves(roc_list)
+               
+            
     #--------------------------------------------------------------- 
     # Plot ROC curves
     #--------------------------------------------------------------- 
@@ -125,7 +168,7 @@ class PlotQG(common_base.CommonBase):
         plt.grid(True)
     
         for label,value in roc_list.items():
-            if label in ['PFN', 'EFN', 'jet_mass', 'jet_angularity', 'LHA', 'thrust', 'pTD', 'hadron_z', 'zg', 'jet_theta_g'] or 'multiplicity' in label:
+            if label in ['PFN','PFN_herwig', 'EFN', 'jet_mass', 'jet_angularity', 'LHA', 'thrust', 'pTD', 'hadron_z', 'zg', 'jet_theta_g'] or 'multiplicity' in label:
                 linewidth = 4
                 alpha = 0.5
                 linestyle = self.linestyle(label)
@@ -192,7 +235,7 @@ class PlotQG(common_base.CommonBase):
         plt.grid(True)
             
         for label,value in roc_list.items():
-            if label in ['PFN', 'EFN', 'jet_mass', 'jet_angularity', 'LHA', 'thrust', 'pTD', 'hadron_z', 'zg', 'jet_theta_g'] or 'multiplicity' in label:
+            if label in ['PFN','PFN_herwig' 'EFN', 'jet_mass', 'jet_angularity', 'LHA', 'thrust', 'pTD', 'hadron_z', 'zg', 'jet_theta_g'] or 'multiplicity' in label:
                 linewidth = 4
                 alpha = 0.5
                 linestyle = self.linestyle(label)
@@ -234,17 +277,27 @@ class PlotQG(common_base.CommonBase):
     def color(self, label):
 
         color = None
-        if label in ['PFN']:
+        if label in ['PFN','PFN_herwig']:
             color = sns.xkcd_rgb['faded purple'] 
         elif label in ['EFN']:
             color = sns.xkcd_rgb['faded red']  
             #color = sns.xkcd_rgb['medium green'] 
-        elif label in [f'sub (r = {self.r_list[1]}), DNN']:
+        elif label in [f'sub (r = {self.dim_list[1]}), DNN']:
             color = sns.xkcd_rgb['light lavendar']    
-        elif label in [f'sub (r = {self.r_list[0]}), DNN']:
+        elif label in [f'sub (r = {self.dim_list[0]}), DNN']:
             color = sns.xkcd_rgb['dark sky blue']    
-        elif label in [f'laman (r = {self.r_list[1]}), DNN']:
+        elif label in [f'laman (r = {self.dim_list[1]}), DNN']:
             color = sns.xkcd_rgb['light brown']  
+        elif label in [f'JFN (n = {self.dim_list[0]})']:
+            color = sns.xkcd_rgb['almost black'] 
+        elif label in [f'JFN (n = {self.dim_list[1]})']:
+            color = sns.xkcd_rgb['medium brown']
+        elif label in [f'JFN (n = {self.dim_list[2]})']:
+            color = sns.xkcd_rgb['light brown']
+        elif label in [f'JFN (n = {self.dim_list[3]})']:
+            color = sns.xkcd_rgb['dark sky blue']  
+        elif label in [f'JFN (n = {self.dim_list[4]})']:
+            color = sns.xkcd_rgb['watermelon']
         elif label in [rf'Nsub (M = {self.K_list[0]}), DNN', f'laman (r = {self.r_list[0]}), DNN']:
             color = sns.xkcd_rgb['watermelon'] 
         elif label in ['jet_theta_g']:
