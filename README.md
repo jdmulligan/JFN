@@ -65,7 +65,7 @@ When you’re done with your session, just type `exit`.
   
 We will only run the ML part of the pipeline on perlmutter. For now, you should copy your output file of generated jets/events:
 ```
-scp -r /rstorage/<output_file> <user>@perlmutter-p1.nersc.gov:/pscratch/sd/j/<user>/
+scp -r /rstorage/<output_file> <user>@perlmutter-p1.nersc.gov:/pscratch/sd/<initial letter of user>/<user>/
 ```
 
 Now we need to initialize the environment:
