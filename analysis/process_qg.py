@@ -205,7 +205,57 @@ class ProcessQG(common_base.CommonBase):
 
         if self.Herwig_dataset == 'True':
             result = [self.analyze_event(fj_particles, 'herwig') for fj_particles in self.df_fjparticles_herwig]
-            
+
+        zcut = 0.01
+        # Subjet Multiplicity
+
+        for r in self.r_list:
+            for N in self.N_cluster_list:
+                for col in range(self.n_total):
+                    count_q=0
+                    count_g=0
+                    if self.y[col] == 1:
+                        for row in range(N):
+                            if self.output[f'subjet'][f'r{r}_N{N}_z'][col][row] > zcut:
+                                count_q+= math.ceil(self.output[f'subjet'][f'r{r}_N{N}_z'][col][row])
+                        self.output['subjet_multiplicity'][f'r{r}_N{N}_q'].append(count_q)
+                    if self.y[col] == 0:
+                        for row in range(N):
+                            if self.output[f'subjet'][f'r{r}_N{N}_z'][col][row] > zcut:
+                                count_g+= math.ceil(self.output[f'subjet'][f'r{r}_N{N}_z'][col][row])
+                        self.output['subjet_multiplicity'][f'r{r}_N{N}_g'].append(count_g)
+        
+        # Hardest Subjet Momenta Distribution
+        
+        for r in self.r_list:
+            for N in self.N_cluster_list:
+                for col in range(self.n_total):
+                    z_q=0
+                    z_g=0
+                    if self.y[col] == 1:
+                      #  for row in range(N):
+                        z_q = self.output[f'subjet'][f'r{r}_N{N}_z'][col][0]
+                        self.output['subjet_multiplicity_hardest_z'][f'r{r}_N{N}_q'].append(z_q)
+                    if self.y[col] == 0:
+                        #for row in range(N):
+                        z_g = self.output[f'subjet'][f'r{r}_N{N}_z'][col][0]
+                        self.output['subjet_multiplicity_hardest_z'][f'r{r}_N{N}_g'].append(z_g)
+
+        # Subjet Momenta Distribution
+        
+        for r in self.r_list:
+            for N in self.N_cluster_list:
+                for col in range(self.n_total):
+                    z_q=0
+                    z_g=0
+                    if self.y[col] == 1:
+                        for row in range(N):
+                            z_q = self.output[f'subjet'][f'r{r}_N{N}_z'][col][row]
+                            self.output['subjet_multiplicity_z'][f'r{r}_N{N}_q'].append(z_q)
+                    if self.y[col] == 0:
+                        for row in range(N):
+                            z_g = self.output[f'subjet'][f'r{r}_N{N}_z'][col][row]
+                            self.output['subjet_multiplicity_z'][f'r{r}_N{N}_g'].append(z_g)    
 
         
         
@@ -306,6 +356,7 @@ class ProcessQG(common_base.CommonBase):
     def fill_nsubjettiness(self, jet, dataset_choice):
 
         axis_definition = fjcontrib.KT_Axes()
+
         for i,N in enumerate(self.N_list):
             
             beta = self.beta_list[i]
@@ -543,6 +594,119 @@ class ProcessQG(common_base.CommonBase):
     #---------------------------------------------------------------
     def plot_QA(self):
     
+        for subjet_multiplicity_observable in self.output_numpy['subjet_multiplicity'].keys():
+
+            mult_result = self.output_numpy['subjet_multiplicity'][subjet_multiplicity_observable]
+            mult_observable_shape = mult_result.shape
+
+            for r in self.r_list:
+                for N in self.N_cluster_list:
+                    if subjet_multiplicity_observable.endswith(f'r{r}_N{N}_q'):
+                        # Plot distributions
+                        if self.subjet_basis == 'exclusive':
+                            plt.xlabel(f'Pythia, subjet multiplicity, {self.subjet_basis} clustering, {self.Clustering_Alg}, N={N}', fontsize=12)
+                        if self.subjet_basis == 'inclusive':
+                            plt.xlabel(f'Pythia, subjet multiplicity, {self.subjet_basis} clustering, {self.Clustering_Alg}, r={r}', fontsize=12)
+                        max = np.amax(mult_result)*1.25
+                        bins = np.arange(0., 140, 2.)
+                        plt.hist(mult_result,
+                                bins,
+                                histtype='step',
+                                density=True,
+                                label = 'q',
+                                linewidth=2,
+                                linestyle='-',
+                                alpha=0.5)
+                    elif subjet_multiplicity_observable.endswith(f'r{r}_N{N}_g'):
+                        plt.hist(mult_result,
+                                bins,
+                                histtype='step',
+                                density=True,
+                                label = 'g',
+                                linewidth=2,
+                                linestyle='-',
+                                alpha=0.5)
+                        plt.legend(loc='best', fontsize=14, frameon=False)
+                        plt.tight_layout()
+                        plt.savefig(os.path.join(self.output_dir, f'subjet multiplicity r={r}, N={N}.pdf'))
+                        plt.close()  
+                    
+        for subjet_multiplicity_hardest_z_observable in self.output_numpy['subjet_multiplicity_hardest_z'].keys():
+
+            mult_result = self.output_numpy['subjet_multiplicity_hardest_z'][subjet_multiplicity_hardest_z_observable]
+            mult_observable_shape = mult_result.shape
+
+            for r in self.r_list:
+                for N in self.N_cluster_list:
+                    if subjet_multiplicity_hardest_z_observable.endswith(f'r{r}_N{N}_q'):
+                        # Plot distributions
+                        if self.subjet_basis == 'exclusive':
+                            plt.xlabel(f'Pythia, hardest z distribution, {self.subjet_basis} clustering, {self.Clustering_Alg}, N={N}', fontsize=11)
+                        if self.subjet_basis == 'inclusive':
+                            plt.xlabel(f'Pythia, hardest z distribution, {self.subjet_basis} clustering, {self.Clustering_Alg}, r={r}', fontsize=11)
+                        max = np.amax(mult_result)*1.25
+                        bins = np.arange(0., 1, 0.04)
+                        plt.hist(mult_result,
+                                bins,
+                                histtype='step',
+                                density=True,
+                                label = 'q',
+                                linewidth=2,
+                                linestyle='-',
+                                alpha=0.5)
+                    elif subjet_multiplicity_hardest_z_observable.endswith(f'r{r}_N{N}_g'):
+                        plt.hist(mult_result,
+                                bins,
+                                histtype='step',
+                                density=True,
+                                label = 'g',
+                                linewidth=2,
+                                linestyle='-',
+                                alpha=0.5)
+                        plt.legend(loc='best', fontsize=14, frameon=False)
+                        plt.tight_layout()
+                        plt.savefig(os.path.join(self.output_dir, f'hardest z distribution r={r}, N={N}.pdf'))
+                        plt.close()  
+
+        for subjet_multiplicity_z_observable in self.output_numpy['subjet_multiplicity_z'].keys():
+
+            mult_result = self.output_numpy['subjet_multiplicity_z'][subjet_multiplicity_z_observable]
+            mult_observable_shape = mult_result.shape
+
+            self.Clustering_Alg
+            for r in self.r_list:
+                for N in self.N_cluster_list:
+                    if subjet_multiplicity_z_observable.endswith(f'r{r}_N{N}_q'):
+                        # Plot distributions
+                        if self.subjet_basis == 'exclusive':
+                            plt.xlabel(f'Pythia, z distribution, {self.subjet_basis} clustering, {self.Clustering_Alg},  N={N}', fontsize=12)
+                        if self.subjet_basis == 'inclusive':
+                            plt.xlabel(f'Pythia, z distribution, {self.subjet_basis} clustering, {self.Clustering_Alg}, r={r}', fontsize=12)
+                        max = np.amax(mult_result)*1.25
+                        bins = np.arange(0., 1, 0.02)
+                        plt.hist(mult_result,
+                                bins,
+                                histtype='step',
+                                density=True,
+                                label = 'q',
+                                linewidth=2,
+                                linestyle='-',
+                                alpha=0.5)
+                    elif subjet_multiplicity_z_observable.endswith(f'r{r}_N{N}_g'):
+                        plt.hist(mult_result,
+                                bins,
+                                histtype='step',
+                                density=True,
+                                label = 'g',
+                                linewidth=2,
+                                linestyle='-',
+                                alpha=0.5)
+                        plt.legend(loc='best', fontsize=14, frameon=False)
+                        plt.tight_layout()
+                        plt.savefig(os.path.join(self.output_dir, f'z distribution of subjets r={r}, N={N}.pdf'))
+                        plt.close()
+
+
         for qa_observable in self.output_numpy['qa'].keys():
             
             qa_result = self.output_numpy['qa'][qa_observable]
