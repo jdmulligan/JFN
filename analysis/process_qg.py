@@ -200,13 +200,17 @@ class ProcessQG(common_base.CommonBase):
         # Fill each of the jet_variables into a list
         fj.ClusterSequence.print_banner()
         print('Finding jets and computing N-subjettiness and subjets...')
+        
+
         result = [self.analyze_event(fj_particles, 'pythia') for fj_particles in self.df_fjparticles]
         
 
         if self.Herwig_dataset == 'True':
             result = [self.analyze_event(fj_particles, 'herwig') for fj_particles in self.df_fjparticles_herwig]
+        
 
-        zcut = 0.01
+        zcut = 0.0
+
         # Subjet Multiplicity
 
         for r in self.r_list:
@@ -235,13 +239,14 @@ class ProcessQG(common_base.CommonBase):
                     if self.y[col] == 1:
                       #  for row in range(N):
                         z_q = self.output[f'subjet'][f'r{r}_N{N}_z'][col][0]
-                        self.output['subjet_multiplicity_hardest_z'][f'r{r}_N{N}_q'].append(z_q)
+                        self.output['hardest_subjet_z'][f'r{r}_N{N}_q'].append(z_q)
                     if self.y[col] == 0:
                         #for row in range(N):
                         z_g = self.output[f'subjet'][f'r{r}_N{N}_z'][col][0]
-                        self.output['subjet_multiplicity_hardest_z'][f'r{r}_N{N}_g'].append(z_g)
+                        self.output['hardest_subjet_z'][f'r{r}_N{N}_g'].append(z_g)
 
-        # Subjet Momenta Distribution
+
+        # WTA Subjet Momenta Distribution
         
         for r in self.r_list:
             for N in self.N_cluster_list:
@@ -249,15 +254,34 @@ class ProcessQG(common_base.CommonBase):
                     z_q=0
                     z_g=0
                     if self.y[col] == 1:
+                        z_q = self.output[f'subjet'][f'r{r}_N{N}_z'][col][self.output['wta_subjet'][f'r{r}_N{N}'][col]]
+                        self.output['wta_subjet_z'][f'r{r}_N{N}_q'].append(z_q)
+                    if self.y[col] == 0:
+                        z_g = self.output[f'subjet'][f'r{r}_N{N}_z'][col][self.output['wta_subjet'][f'r{r}_N{N}'][col]]
+                        self.output['wta_subjet_z'][f'r{r}_N{N}_g'].append(z_g)
+
+
+        # Subjet Momenta Distribution
+        
+        for r in self.r_list:
+            for N in self.N_cluster_list:
+                #print(self.output['wta_subjet'][f'r{r}_N{N}'])
+                for col in range(self.n_total):
+                    z_q=0
+                    z_g=0
+                    if self.y[col] == 1:
                         for row in range(N):
                             z_q = self.output[f'subjet'][f'r{r}_N{N}_z'][col][row]
-                            self.output['subjet_multiplicity_z'][f'r{r}_N{N}_q'].append(z_q)
+                            self.output['subjet_z'][f'r{r}_N{N}_q'].append(z_q)
                     if self.y[col] == 0:
                         for row in range(N):
                             z_g = self.output[f'subjet'][f'r{r}_N{N}_z'][col][row]
-                            self.output['subjet_multiplicity_z'][f'r{r}_N{N}_g'].append(z_g)    
+                            self.output['subjet_z'][f'r{r}_N{N}_g'].append(z_g)
+                   # print(col)    
+                    #print(self.output[f'subjet'][f'r{r}_N{N}_z'][col][self.output['wta_subjet'][f'r{r}_N{N}'][col]])
+                    #print(self.output[f'subjet'][f'r{r}_N{N}_z'][col][0])
+                    #print()
 
-        
         
         # Transform the dictionary of lists into a dictionary of numpy arrays
         self.output_numpy = {}
@@ -384,6 +408,18 @@ class ProcessQG(common_base.CommonBase):
         else:
             sys.exit(f'ERROR: Invalid choice for subjet_basis')
 
+        # Pt sorted hadrons
+
+        hadrons_aux  = fj.sorted_by_pt(jet.constituents())
+
+        # WTA Axes
+
+        jet_def_wta = fj.JetDefinition(fj.kt_algorithm, 2*self.R) #to cluster the whole jet again, with WTA this time
+        jet_def_wta.set_recombination_scheme(fj.WTA_pt_scheme)
+
+        reclusterer_wta = fjcontrib.Recluster(jet_def_wta)
+        jet_wta = reclusterer_wta.result(jet)
+
         for r in self.r_list:
 
             if self.Clustering_Alg == 'kt_algorithm':
@@ -397,6 +433,33 @@ class ProcessQG(common_base.CommonBase):
 
             cs_subjet = fj.ClusterSequence(jet.constituents(), subjet_def)
 
+            # To find which subjet contains the WTA axes, i.e. WTA subjet
+            for N_cluster in self.N_cluster_list:
+
+                if self.subjet_basis == 'inclusive':
+                    subjets = fj.sorted_by_pt(cs_subjet.inclusive_jets())
+                elif self.subjet_basis == 'exclusive':
+                    subjets = fj.sorted_by_pt(cs_subjet.exclusive_jets_up_to(N_cluster))
+
+                for N in range(len(hadrons_aux)):
+                    deltaR_wtahadron = jet_wta.delta_R(hadrons_aux[N])
+                    if deltaR_wtahadron==0:
+                        wtahadron=N
+                        break 
+                    
+                for i in range(len(subjets)):
+                    for j in range(len(subjets[i].constituents())):
+                        deltaR_wtasubjet = subjets[i].constituents()[j].delta_R(hadrons_aux[wtahadron])
+                        if deltaR_wtasubjet==0:
+                            wtasubjet=i
+                            self.output['wta_subjet'][f'r{r}_N{N_cluster}'].append(wtasubjet)
+                            # Break the loop to save time
+                            break 
+                    else:
+                        # Continue if the inner loop wasn't broken.
+                        continue
+                    # Inner loop was broken, break the outer
+                    break        
 
 
             # Construct a Laman graph for each jet, and save the edges (node connections) and angles
@@ -412,6 +475,7 @@ class ProcessQG(common_base.CommonBase):
                     subjets = fj.sorted_by_pt(cs_subjet.inclusive_jets())
                 elif self.subjet_basis == 'exclusive':
                     subjets = fj.sorted_by_pt(cs_subjet.exclusive_jets_up_to(N_cluster))
+
 
                 for N in range(N_cluster): #the max number of N is N_max-1 because we start from 0
                     # First, fill the z values of the node + (η,φ) for the subjets
@@ -593,7 +657,9 @@ class ProcessQG(common_base.CommonBase):
     # Plot QA
     #---------------------------------------------------------------
     def plot_QA(self):
-    
+        
+        # Subjet Multiplicity
+
         for subjet_multiplicity_observable in self.output_numpy['subjet_multiplicity'].keys():
 
             mult_result = self.output_numpy['subjet_multiplicity'][subjet_multiplicity_observable]
@@ -631,14 +697,18 @@ class ProcessQG(common_base.CommonBase):
                         plt.savefig(os.path.join(self.output_dir, f'subjet multiplicity r={r}, N={N}.pdf'))
                         plt.close()  
                     
-        for subjet_multiplicity_hardest_z_observable in self.output_numpy['subjet_multiplicity_hardest_z'].keys():
+        
 
-            mult_result = self.output_numpy['subjet_multiplicity_hardest_z'][subjet_multiplicity_hardest_z_observable]
+        # Hardest subjet z distribution
+
+        for hardest_subjet_z_observable in self.output_numpy['hardest_subjet_z'].keys():
+
+            mult_result = self.output_numpy['hardest_subjet_z'][hardest_subjet_z_observable]
             mult_observable_shape = mult_result.shape
 
             for r in self.r_list:
                 for N in self.N_cluster_list:
-                    if subjet_multiplicity_hardest_z_observable.endswith(f'r{r}_N{N}_q'):
+                    if hardest_subjet_z_observable.endswith(f'r{r}_N{N}_q'):
                         # Plot distributions
                         if self.subjet_basis == 'exclusive':
                             plt.xlabel(f'Pythia, hardest z distribution, {self.subjet_basis} clustering, {self.Clustering_Alg}, N={N}', fontsize=11)
@@ -654,7 +724,7 @@ class ProcessQG(common_base.CommonBase):
                                 linewidth=2,
                                 linestyle='-',
                                 alpha=0.5)
-                    elif subjet_multiplicity_hardest_z_observable.endswith(f'r{r}_N{N}_g'):
+                    elif hardest_subjet_z_observable.endswith(f'r{r}_N{N}_g'):
                         plt.hist(mult_result,
                                 bins,
                                 histtype='step',
@@ -668,15 +738,59 @@ class ProcessQG(common_base.CommonBase):
                         plt.savefig(os.path.join(self.output_dir, f'hardest z distribution r={r}, N={N}.pdf'))
                         plt.close()  
 
-        for subjet_multiplicity_z_observable in self.output_numpy['subjet_multiplicity_z'].keys():
+        # WTA subjet z distribution
+        
+        for wta_subjet_z_observable in self.output_numpy['wta_subjet_z'].keys():
 
-            mult_result = self.output_numpy['subjet_multiplicity_z'][subjet_multiplicity_z_observable]
+            mult_result = self.output_numpy['wta_subjet_z'][wta_subjet_z_observable]
+            mult_observable_shape = mult_result.shape
+
+            for r in self.r_list:
+                for N in self.N_cluster_list:
+                    if wta_subjet_z_observable.endswith(f'r{r}_N{N}_q'):
+                        # Plot distributions
+                        if self.subjet_basis == 'exclusive':
+                            plt.xlabel(f'Pythia, WTA subjet z distribution, {self.subjet_basis} clustering, {self.Clustering_Alg}, N={N}', fontsize=11)
+                        if self.subjet_basis == 'inclusive':
+                            plt.xlabel(f'Pythia, WTA subjet z distribution, {self.subjet_basis} clustering, {self.Clustering_Alg}, r={r}', fontsize=11)
+                        max = np.amax(mult_result)*1.25
+                        bins = np.arange(0., 1, 0.04)
+                        plt.hist(mult_result,
+                                bins,
+                                histtype='step',
+                                density=True,
+                                label = 'q',
+                                linewidth=2,
+                                linestyle='-',
+                                alpha=0.5)
+                    elif wta_subjet_z_observable.endswith(f'r{r}_N{N}_g'):
+                        plt.hist(mult_result,
+                                bins,
+                                histtype='step',
+                                density=True,
+                                label = 'g',
+                                linewidth=2,
+                                linestyle='-',
+                                alpha=0.5)
+                        plt.legend(loc='best', fontsize=14, frameon=False)
+                        plt.tight_layout()
+                        plt.savefig(os.path.join(self.output_dir, f'WTA subjet z distribution r={r}, N={N}.pdf'))
+                        plt.close()
+
+
+
+
+
+        # Subjet z distribution
+        for subjet_z_observable in self.output_numpy['subjet_z'].keys():
+
+            mult_result = self.output_numpy['subjet_z'][subjet_z_observable]
             mult_observable_shape = mult_result.shape
 
             self.Clustering_Alg
             for r in self.r_list:
                 for N in self.N_cluster_list:
-                    if subjet_multiplicity_z_observable.endswith(f'r{r}_N{N}_q'):
+                    if subjet_z_observable.endswith(f'r{r}_N{N}_q'):
                         # Plot distributions
                         if self.subjet_basis == 'exclusive':
                             plt.xlabel(f'Pythia, z distribution, {self.subjet_basis} clustering, {self.Clustering_Alg},  N={N}', fontsize=12)
@@ -692,7 +806,7 @@ class ProcessQG(common_base.CommonBase):
                                 linewidth=2,
                                 linestyle='-',
                                 alpha=0.5)
-                    elif subjet_multiplicity_z_observable.endswith(f'r{r}_N{N}_g'):
+                    elif subjet_z_observable.endswith(f'r{r}_N{N}_g'):
                         plt.hist(mult_result,
                                 bins,
                                 histtype='step',
