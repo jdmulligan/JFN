@@ -133,11 +133,14 @@ class PlotQG(common_base.CommonBase):
             roc_list['PFN'] = self.roc_curve_dict['pfn']
             if self.subjet_basis =='exclusive':
                 for N_cluster in self.njet_list:
-                    roc_list[f'JFN (n = {N_cluster})'] = self.roc_curve_dict['sub_pfn'][N_cluster]
+                    roc_list[f'JFN (N = {N_cluster})'] = self.roc_curve_dict['sub_pfn'][N_cluster]
             elif self.subjet_basis =='inclusive':
                 for r in self.r_list:
                     roc_list[f'JFN (r = {r})'] = self.roc_curve_dict['sub_pfn'][r]
-
+            #print('roc list')
+            #for key, value in roc_list.items() :
+             #   print (key, value)
+            
             self.plot_roc_curves(roc_list)
 
 
@@ -147,7 +150,7 @@ class PlotQG(common_base.CommonBase):
 
                 if self.subjet_basis =='exclusive':
                     for N_cluster in self.njet_list:
-                        roc_list[f'JFN_herwig (n = {N_cluster})'] = self.roc_curve_dict['sub_pfn_herwig'][N_cluster]
+                        roc_list[f'JFN_herwig (N = {N_cluster})'] = self.roc_curve_dict['sub_pfn_herwig'][N_cluster]
                 elif self.subjet_basis =='inclusive':
                     for r in self.r_list:
                         roc_list[f'JFN_herwig (r = {r})'] = self.roc_curve_dict['sub_pfn_herwig'][r]
@@ -166,10 +169,10 @@ class PlotQG(common_base.CommonBase):
         plt.xlabel('False q Rate', fontsize=16)
         plt.ylabel('True q Rate', fontsize=16)
         plt.grid(True)
-    
+        
         for label,value in roc_list.items():
             if label in ['PFN','PFN_herwig', 'EFN', 'jet_mass', 'jet_angularity', 'LHA', 'thrust', 'pTD', 'hadron_z', 'zg', 'jet_theta_g'] or 'multiplicity' in label:
-                linewidth = 4
+                linewidth = 3
                 alpha = 0.5
                 linestyle = self.linestyle(label)
                 color=self.color(label)
@@ -203,6 +206,36 @@ class PlotQG(common_base.CommonBase):
                 linestyle = self.linestyle(label)
                 color=self.color(label)
                 legend_fontsize = 12
+
+            elif 'sub_pfn' in self.models:
+                if self.subjet_basis =='exclusive':
+                    for N_cluster in self.njet_list:
+                        if f'JFN (N = {N_cluster})' in label:
+                            linewidth = 2
+                            alpha = 0.5
+                            linestyle = 'solid'
+                            color=self.color(label)
+                            legend_fontsize = 12
+                        elif f'JFN_herwig (N = {N_cluster})' in label:
+                            linewidth = 2
+                            alpha = 0.5
+                            linestyle = 'solid'
+                            color=self.color(label)
+                            legend_fontsize = 12
+                elif self.subjet_basis =='inclusive':
+                    for r in self.r_list:
+                        if f'JFN (r = {r})' in label:
+                            linewidth = 2
+                            alpha = 0.5
+                            linestyle = 'solid'
+                            color=self.color(label)
+                            legend_fontsize = 12
+                        elif f'JFN_herwig (r = {r})' in label:
+                            linewidth = 2
+                            alpha = 0.5
+                            linestyle = 'solid'
+                            color=self.color(label)
+                            legend_fontsize = 12
             else:
                 linewidth = 2
                 linestyle = 'solid'
@@ -277,33 +310,68 @@ class PlotQG(common_base.CommonBase):
     def color(self, label):
 
         color = None
+          
         if label in ['PFN','PFN_herwig']:
             color = sns.xkcd_rgb['faded purple'] 
         elif label in ['EFN']:
-            color = sns.xkcd_rgb['faded red']  
-            #color = sns.xkcd_rgb['medium green'] 
+            color = sns.xkcd_rgb['faded red']
         elif label in [f'sub (r = {self.dim_list[1]}), DNN']:
             color = sns.xkcd_rgb['light lavendar']    
         elif label in [f'sub (r = {self.dim_list[0]}), DNN']:
             color = sns.xkcd_rgb['dark sky blue']    
         elif label in [f'laman (r = {self.dim_list[1]}), DNN']:
             color = sns.xkcd_rgb['light brown']  
-        elif label in [f'JFN (n = {self.dim_list[0]})']:
-            color = sns.xkcd_rgb['almost black'] 
-        elif label in [f'JFN (n = {self.dim_list[1]})']:
-            color = sns.xkcd_rgb['medium brown']
-        elif label in [f'JFN (n = {self.dim_list[2]})']:
-            color = sns.xkcd_rgb['light brown']
-        elif label in [f'JFN (n = {self.dim_list[3]})']:
-            color = sns.xkcd_rgb['dark sky blue']  
-        elif label in [f'JFN (n = {self.dim_list[4]})']:
-            color = sns.xkcd_rgb['watermelon']
         elif label in [rf'Nsub (M = {self.K_list[0]}), DNN', f'laman (r = {self.r_list[0]}), DNN']:
             color = sns.xkcd_rgb['watermelon'] 
         elif label in ['jet_theta_g']:
             color = sns.xkcd_rgb['medium brown']
         else:
-            color = sns.xkcd_rgb['almost black']
+            try: 
+                if self.subjet_basis =='exclusive':
+                        if label in [f'JFN (N = {self.dim_list[0]})']:
+                            color = sns.xkcd_rgb['almost black']
+                        elif label in [f'JFN_herwig (N = {self.dim_list[0]})']:
+                            color = sns.xkcd_rgb['almost black']
+                        elif label in [f'JFN (N = {self.dim_list[1]})']:
+                            color = sns.xkcd_rgb['medium brown']
+                        elif label in [f'JFN_herwig (N = {self.dim_list[1]})']:
+                            color = sns.xkcd_rgb['medium brown']
+                        elif label in [f'JFN (N = {self.dim_list[2]})']:
+                            color = sns.xkcd_rgb['light brown']
+                        elif label in [f'JFN_herwig (N = {self.dim_list[2]})']:
+                            color = sns.xkcd_rgb['light brown']
+                        elif label in [f'JFN (N = {self.dim_list[3]})']:
+                            color = sns.xkcd_rgb['dark sky blue']  
+                        elif label in [f'JFN_herwig (N = {self.dim_list[3]})']:
+                            color = sns.xkcd_rgb['dark sky blue']  
+                        elif label in [f'JFN (N = {self.dim_list[4]})']:
+                            color = sns.xkcd_rgb['watermelon']
+                        elif label in [f'JFN_herwig (N = {self.dim_list[4]})']:
+                            color = sns.xkcd_rgb['watermelon']
+                elif self.subjet_basis =='inclusive':
+                    if label in [f'JFN (r = {self.dim_list[0]})']:
+                        color = sns.xkcd_rgb['almost black']
+                    if label in [f'JFN_herwig (r = {self.dim_list[0]})']:
+                        color = sns.xkcd_rgb['almost black'] 
+                        print('yes')
+                    elif label in [f'JFN (r = {self.dim_list[1]})']:
+                        color = sns.xkcd_rgb['medium brown']
+                    elif label in [f'JFN_herwig (r = {self.dim_list[1]})']:
+                        color = sns.xkcd_rgb['medium brown']
+                    elif label in [f'JFN (r = {self.dim_list[2]})']:
+                        color = sns.xkcd_rgb['light brown']
+                    elif label in [f'JFN_herwig (r = {self.dim_list[2]})']:
+                        color = sns.xkcd_rgb['light brown']
+                    elif label in [f'JFN (r = {self.dim_list[3]})']:
+                        color = sns.xkcd_rgb['dark sky blue']  
+                    elif label in [f'JFN_herwig (r = {self.dim_list[3]})']:
+                        color = sns.xkcd_rgb['dark sky blue']  
+                    elif label in [f'JFN (r = {self.dim_list[4]})']:
+                        color = sns.xkcd_rgb['watermelon']
+                    elif label in [f'JFN_herwig (r = {self.dim_list[4]})']:
+                        color = sns.xkcd_rgb['watermelon']
+            except:
+                color = sns.xkcd_rgb['almost black']
 
         return color
 
