@@ -123,7 +123,6 @@ class AnalyzeQG(common_base.CommonBase):
             self.N_list = hf['N_list'][:]
             self.beta_list = hf['beta_list'][:]
             self.r_list = hf['r_list'][:]
-            
 
 
         # We require njet and Nmax are a list 
@@ -542,6 +541,9 @@ class AnalyzeQG(common_base.CommonBase):
     # Fit Graph Neural Network with particle four-vectors
     #---------------------------------------------------------------
     def fit_particle_gnn(self, model, model_settings):
+        print()
+        print('fit_particle_gnn...')
+        start_time = time.time()
 
         # load data
         X, y = energyflow.qg_jets.load(self.n_total)
@@ -606,8 +608,7 @@ class AnalyzeQG(common_base.CommonBase):
             graph_label = torch.tensor(Y[i],dtype=torch.int64)
 
             # 5. Create PyG data object
-            graph = torch_geometric.data.Data(x=node_features, edge_index=edge_indices_long, edge_attr=None, y=graph_label) 
-            
+            graph = torch_geometric.data.Data(x=node_features, edge_index=edge_indices_long, edge_attr=None, y=graph_label).to(self.torch_device)
 
             # 6. Add to list of graphs
             graph_list_fullycon.append(graph)
@@ -644,7 +645,7 @@ class AnalyzeQG(common_base.CommonBase):
 
                     graph_label = torch.tensor(Y[i],dtype=torch.int64)
 
-                    graph = torch_geometric.data.Data(x=node_features_laman[f'subjet_r{r}_N{N}'], edge_index=edge_indices_laman_long[f'subjet_r{r}_N{N}'], edge_attr=edge_attr_laman_del[f'subjet_r{r}_N{N}'], y=graph_label) 
+                    graph = torch_geometric.data.Data(x=node_features_laman[f'subjet_r{r}_N{N}'], edge_index=edge_indices_laman_long[f'subjet_r{r}_N{N}'], edge_attr=edge_attr_laman_del[f'subjet_r{r}_N{N}'], y=graph_label).to(self.torch_device) 
 
 
                     graph_list[f'subjet_r{r}_N{N}'].append(graph)
@@ -652,7 +653,6 @@ class AnalyzeQG(common_base.CommonBase):
 
         # 7. Create PyG batch object that contains all the graphs and labels
         graph_batch = torch_geometric.data.Batch().from_data_list(graph_list_fullycon)
-        
 
         # Print
         print(f'Number of graphs in PyG batch object: {graph_batch.num_graphs}')
@@ -743,6 +743,7 @@ class AnalyzeQG(common_base.CommonBase):
                     
                     graph_batch[f'subjet_r{r}_N{N}'] = torch_geometric.data.Batch().from_data_list(graph_list[f'subjet_r{r}_N{N}'])
                     graph_batch = graph_batch[f'subjet_r{r}_N{N}']
+                    print(f'graph_batch: {graph_batch.is_cuda}')
 
                     # Print
                     print(f'Number of graphs in PyG batch object: {graph_batch.num_graphs}')
@@ -791,6 +792,8 @@ class AnalyzeQG(common_base.CommonBase):
                     # 3. Train a final classifier on the graph embedding
                     gnn_model = GAT_class(graph_batch, hidden_channels = 8, heads = 8, edge_dimension = 1, edge_attributes = graph_batch.edge_attr)
                     print(gnn_model)
+                    gnn_model = gnn_model.to(self.torch_device)
+                    #print(f'gnn_model is_cuda: {gnn_model.is_cuda}')
 
                     # Now train the GNN
                     optimizer = torch.optim.Adam(gnn_model.parameters(), lr=0.01)
@@ -820,7 +823,9 @@ class AnalyzeQG(common_base.CommonBase):
                     print(f'Laman GNN with r={r}, N={N} : AUC based on particle four-vectors is: {gnn_auc}')
                     self.AUC[f'{model}'].append(gnn_auc)
 
-                    
+        print(f'--- runtime: {time.time() - start_time} seconds ---')
+        print()
+
     #---------------------------------------------------------------
     def train_gnn(self, train_loader, gnn_model, optimizer, criterion):
         gnn_model.train()
@@ -829,6 +834,7 @@ class AnalyzeQG(common_base.CommonBase):
 
         for data in train_loader:  # Iterate in batches over the training dataset.
 
+            data = data.to_device(self.torch_device)
             out = gnn_model(data.x, data.edge_index, data.batch, data.edge_attr)  # Perform a single forward pass.
             loss = criterion(out, data.y)  # Compute the loss.
             loss_cum += loss.item() #Cumulative loss
@@ -844,6 +850,7 @@ class AnalyzeQG(common_base.CommonBase):
 
         correct = 0
         for data in loader:  # Iterate in batches over the training/test dataset.
+            data = data.to_device(self.torch_device)
             out = gnn_model(data.x, data.edge_index, data.batch, data.edge_attr)  
             pred = out.argmax(dim=1)  # Use the class with highest probability.
             correct += int((pred == data.y).sum())  # Check against ground-truth labels.
@@ -1193,6 +1200,9 @@ class AnalyzeQG(common_base.CommonBase):
     # Fit ML model -- Deep Set/Particle Flow Networks
     #---------------------------------------------------------------
     def fit_pfn(self, model, model_settings):
+        print()
+        print('fit_pfn...')
+        start_time = time.time()
     
         # Load the four-vectors directly from the quark vs gluon data set
         X_PFN, y_PFN = energyflow.datasets.qg_jets.load(num_data=self.n_total, pad=True, 
@@ -1311,12 +1321,16 @@ class AnalyzeQG(common_base.CommonBase):
         else:
             sys.exit(f'ERROR: Wrong Herwig_dataset choice')
 
-
+        print(f'--- runtime: {time.time() - start_time} seconds ---')
+        print()
 
     #---------------------------------------------------------------
     # Fit PFN for subjets
     #---------------------------------------------------------------
     def fit_sub_pfn(self, model, model_settings, r, N):
+        print()
+        print('fit_sub_pfn...')
+        start_time = time.time()
     
         x_subjet_input_sub_pfn = []
         for n in range(N):
@@ -1447,6 +1461,9 @@ class AnalyzeQG(common_base.CommonBase):
             self.AUC[f'{model}'].append(auc_PFN)
 
             self.roc_curve_dict[model][dim] = sklearn.metrics.roc_curve(Y_PFN_test[:,1], preds_PFN[:,1])
+
+        print(f'--- runtime: {time.time() - start_time} seconds ---')
+        print()
 
     #---------------------------------------------------------------
     # Fit ML model -- (IRC safe) Energy Flow Networks
