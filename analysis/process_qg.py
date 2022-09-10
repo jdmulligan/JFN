@@ -17,6 +17,7 @@ import math
 import pandas as pd
 import numpy as np
 from matplotlib import pyplot as plt
+import uproot
 
 # Fastjet via python (from external library heppy)
 import fastjet as fj
@@ -52,8 +53,8 @@ class ProcessQG(common_base.CommonBase):
         # Initialize data structures to store results
         self.initialize_data_structures()
 
-        # Load quark-gluon dataset
-        self.load_qg_dataset()
+        # Load dataset (quark-gluon or Z/QCD)
+        self.load_dataset()
      
         #print(self)
         print()
@@ -67,6 +68,7 @@ class ProcessQG(common_base.CommonBase):
         with open(self.config_file, 'r') as stream:
           config = yaml.safe_load(stream)
 
+        self.dataset_type = config['dataset_type']
         self.R = config['R']
         self.pt = config['pt']
         self.y_max = config['y_max']
@@ -135,61 +137,93 @@ class ProcessQG(common_base.CommonBase):
     #---------------------------------------------------------------
     # Load qg data set 
     #---------------------------------------------------------------
-    def load_qg_dataset(self):
+    def load_dataset(self):
         
-        # https://energyflow.network/docs/datasets/#quark-and-gluon-jets
-        # X : a three-dimensional numpy array of jets:
-        #     list of jets with list of particles for each jet, with (pt,y,phi,pid) values for each particle
-        # y : a numpy array of quark/gluon jet labels (quark=1 and gluon=0).
-        # The jets are padded with zero-particles in order to make a contiguous array.
-        print()
-        print('Loading qg dataset:')
-        X, self.y = energyflow.datasets.qg_jets.load(num_data=self.n_total, pad=True, 
-                                                     generator='pythia',  # Herwig is also available
-                                                     with_bc=False        # Turn on to enable heavy quarks
-                                                     )
-        print('(n_jets, n_particles per jet, n_variables): {}'.format(X.shape))
-        print()
+        if self.dataset_type == 'qg':
 
-        # Next, we will transform these into fastjet::PseudoJet objects.
-        # This allows us to use the fastjet contrib to compute our custom basis (Nsubjettiness, subjets, etc).
+            # https://energyflow.network/docs/datasets/#quark-and-gluon-jets
+            # X : a three-dimensional numpy array of jets:
+            #     list of jets with list of particles for each jet, with (pt,y,phi,pid) values for each particle
+            # y : a numpy array of quark/gluon jet labels (quark=1 and gluon=0).
+            # The jets are padded with zero-particles in order to make a contiguous array.
+            print()
+            print('Loading qg dataset:')
+            X, self.y = energyflow.datasets.qg_jets.load(num_data=self.n_total, pad=True, 
+                                                        generator='pythia',  # Herwig is also available
+                                                        with_bc=False        # Turn on to enable heavy quarks
+                                                        )
+            print('(n_jets, n_particles per jet, n_variables): {}'.format(X.shape))
+            print()
 
-        # Translate 3D numpy array (100,000 x 556 particles x 4 vars) into a dataframe
-        # Define a unique index for each jet
-        columns = ['pt', 'y', 'phi', 'pid']
-        df_particles = pd.DataFrame(X.reshape(-1, 4), columns=columns)
-        df_particles.index = np.repeat(np.arange(X.shape[0]), X.shape[1]) + 1
-        df_particles.index.name = 'jet_id'
-        
-        # (i) Group the particle dataframe by jet id
-        #     df_particles_grouped is a DataFrameGroupBy object with one particle dataframe per jet
-        df_fjparticles_grouped = df_particles.groupby('jet_id')
-        
-        # (ii) Transform the DataFrameGroupBy object to a SeriesGroupBy of fastjet::PseudoJets
-        # NOTE: for now we neglect the mass -- and assume y=eta
-        # TO DO: Add y to https://github.com/matplo/heppy/blob/master/cpptools/src/fjext/fjtools.cxx
-        # TO DO: Add mass vector using pdg
-        print('Converting particle dataframe to fastjet::PseudoJets...')
-        self.df_fjparticles = df_fjparticles_grouped.apply(self.get_fjparticles)
-        print('Done.')
-        print()
+            # Next, we will transform these into fastjet::PseudoJet objects.
+            # This allows us to use the fastjet contrib to compute our custom basis (Nsubjettiness, subjets, etc).
 
-         # Load the Herwig Dataset for testing (For now only pfn and sub_pfn are supported)
-        if self.Herwig_dataset == 'True':
-
-            X_herwig, self.y_herwig = energyflow.datasets.qg_jets.load(num_data=self.n_val + self.n_test, pad=True, 
-                                                     generator='herwig',  # Herwig is also available
-                                                     with_bc=False        # Turn on to enable heavy quarks
-                                                     )
-          
+            # Translate 3D numpy array (100,000 x 556 particles x 4 vars) into a dataframe
+            # Define a unique index for each jet
             columns = ['pt', 'y', 'phi', 'pid']
-            df_particles_herwig = pd.DataFrame(X_herwig.reshape(-1, 4), columns=columns)
-            df_particles_herwig.index = np.repeat(np.arange(X_herwig.shape[0]), X_herwig.shape[1]) + 1
-            df_particles_herwig.index.name = 'jet_id'
+            df_particles = pd.DataFrame(X.reshape(-1, 4), columns=columns)
+            df_particles.index = np.repeat(np.arange(X.shape[0]), X.shape[1]) + 1
+            df_particles.index.name = 'jet_id'
+            
+            # (i) Group the particle dataframe by jet id
+            #     df_particles_grouped is a DataFrameGroupBy object with one particle dataframe per jet
+            df_fjparticles_grouped = df_particles.groupby('jet_id')
+            
+            # (ii) Transform the DataFrameGroupBy object to a SeriesGroupBy of fastjet::PseudoJets
+            # NOTE: for now we neglect the mass -- and assume y=eta
+            # TO DO: Add y to https://github.com/matplo/heppy/blob/master/cpptools/src/fjext/fjtools.cxx
+            # TO DO: Add mass vector using pdg
+            print('Converting particle dataframe to fastjet::PseudoJets...')
+            self.df_fjparticles = df_fjparticles_grouped.apply(self.get_fjparticles)
+            print('Done.')
+            print()
 
-            df_fjparticles_herwig_grouped = df_particles_herwig.groupby('jet_id')
+            # Load the Herwig Dataset for testing (For now only pfn and sub_pfn are supported)
+            if self.Herwig_dataset == 'True':
 
-            self.df_fjparticles_herwig = df_fjparticles_herwig_grouped.apply(self.get_fjparticles)
+                X_herwig, self.y_herwig = energyflow.datasets.qg_jets.load(num_data=self.n_val + self.n_test, pad=True, 
+                                                        generator='herwig',  # Herwig is also available
+                                                        with_bc=False        # Turn on to enable heavy quarks
+                                                        )
+            
+                columns = ['pt', 'y', 'phi', 'pid']
+                df_particles_herwig = pd.DataFrame(X_herwig.reshape(-1, 4), columns=columns)
+                df_particles_herwig.index = np.repeat(np.arange(X_herwig.shape[0]), X_herwig.shape[1]) + 1
+                df_particles_herwig.index.name = 'jet_id'
+
+                df_fjparticles_herwig_grouped = df_particles_herwig.groupby('jet_id')
+
+                self.df_fjparticles_herwig = df_fjparticles_herwig_grouped.apply(self.get_fjparticles)
+
+        elif self.dataset_type == 'Zjet':
+
+            # Convert ROOT TTree into a SeriesGroupBy object of fastjet particles per event
+            input_file = '/rstorage/ml/zjets_test/pythia_gen_qorgorZjet_mDT0.04_Zjet_0.root'
+            tree_name = 'tree_Particle_gen'
+            unique_identifier =  ['run_number', 'ev_id']
+            tree_columns = unique_identifier + ['ParticlePt', 'ParticleEta', 'ParticlePhi', 'ParticlePID']
+
+            print('Convert ROOT trees to pandas dataframes...')
+            print(f'    track_tree_name = {tree_name}')
+
+            jet_tree = None
+            jet_df = None
+            with uproot.open(input_file)[tree_name] as jet_tree:
+                if not jet_tree:
+                    raise ValueError(f'Tree {tree_name} not found in file {input_file}')
+                jet_df = uproot.concatenate(jet_tree, tree_columns, library='pd')
+
+            jet_df.rename(columns={'ParticlePt': 'pt', 'ParticleEta': 'y', 'ParticlePhi': 'phi', 'ParticlePID': 'pid'}, inplace=True)
+
+            # (i) Group the particle dataframe by jet
+            #     jet_df_grouped is a DataFrameGroupBy object with one particle dataframe per jet
+            jet_df_grouped = jet_df.groupby(unique_identifier)
+            
+            # (ii) Transform the DataFrameGroupBy object to a SeriesGroupBy of fastjet particles
+            self.df_fjparticles = jet_df_grouped.apply(self.get_fjparticles)
+
+            # Set labels (Z=1, QCD=0)
+            self.y = np.ones(len(self.df_fjparticles))
 
     #---------------------------------------------------------------
     # Main processing function
