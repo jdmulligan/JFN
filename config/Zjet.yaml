@@ -1,0 +1,150 @@
+# Config file for Z jet vs. QCD jet classification
+
+#------------------------------------------------------------------
+# These parameters are used in the processing script
+#------------------------------------------------------------------
+
+# File on hiccup at: /rstorage/ml/zjets_test/pythia_gen_qorgorZjet_mDT0.04_Zjet_0.root
+#  - tree_Particle_gen: anti-kT jet with R=1.0 matched with Z
+#  - tree_Particle_gen_mDT0.04: same anti-kT jet but cleaned up with Mass Drop Tagger (z_cut = 0.04) - a la std practice to do that I’ve seen (diffs only should affect low-pT’s)
+
+# Some parameters of the Z-jet dataset
+
+dataset_type: 'Zjet'
+
+# We will loop over all .root files in the following directories that contain the specified filepattern
+Z_jet_dir: '/rstorage/jfn/mateusz/new_z/'
+QCD_jet_dir: '/rstorage/jfn/mateusz/new_q_g'
+Z_jet_filepattern: 'pythia_gen_qorgorZjet_mDT0.04_Zjet'
+QCD_jet_filepattern_quark: 'pythia_parton_tag_quark'
+QCD_jet_filepattern_gluon: 'pythia_parton_tag_glue'
+R: 1.0
+pt: [500., 550.]
+y_max: 1.71
+
+# Size of q-g labeled data to load
+n_total: 50000
+
+# Nsubjettiness basis
+K_max: 2
+
+# Subjet basis: 'exclusive' or 'inclusive'
+subjet_basis: 'inclusive'
+
+# 1. Exclusive, fixed number of jets; It must be in the form of a list . Note: using the anti-kt alg. here gives a warning from fastjet
+njet: [100]
+
+# 2. Inclusive. Fixed value for the subjet radius; It must be in the form of a list. Choose radii r and cutoff N_max
+N_max: [30]
+r: [0.1]
+
+# Clustering Algorithm, The options are: 'kt_algorithm', 'antikt_algorithm' ,'cambridge_algorithm' 
+Clustering_Alg: 'antikt_algorithm' 
+
+# Laman Construction, The options are: 'naive' , '1N', '1N2N'
+Laman_construction : 'naive' 
+
+# Load Herwig Dataset for testing. Boolean variable
+Herwig_dataset : 'False'
+
+#------------------------------------------------------------------
+# These parameters are used only in ML analysis
+#------------------------------------------------------------------
+
+# Size of q-g labeled data to load
+n_train: 1600000
+n_val:   200000
+n_test:  200000
+
+# Classification labels
+q_label: 'Z'                                      # label 1
+g_label: 'QCD'                                    # label 0
+
+# Define Nsubjettiness observable basis sets to train models
+# The K-body phase space is (3K-4)-dimensional
+K: [2]
+
+# Select model: pfn, sub_pfn, efn, particle_gnn, sub_dnn, laman_dnn, nsub_dnn, nsub_linear
+models: [pfn, sub_pfn]
+
+pfn:
+
+    # Network architecture parameters
+    Phi_sizes: [100, 100, 256]
+    F_sizes: [100, 100, 100]
+
+    # Network training parameters
+    epochs: 100
+    batch_size: 500
+    use_pids: True                                  # Use PID information (this option is currently ignored)
+
+sub_pfn:
+
+    # Network architecture parameters
+    Phi_sizes: [100, 100 , 256]
+    F_sizes: [100, 100, 100]
+
+    # Network training parameters
+    epochs: 100
+    batch_size: 500
+    use_pids: False                                 
+    
+efn:
+
+    # Network architecture parameters
+    Phi_sizes: [100, 100, 256]
+    F_sizes: [100, 100, 100]
+
+    # Network training parameters
+    learning_rate: 0.001
+    epochs: 100
+    batch_size: 500
+
+particle_gnn:
+    epochs: 10
+    batch_size: 128
+
+sub_dnn:
+
+    # Model hyperparameters
+    learning_rate: [0.001]                          # (0.001 cf 1810.05165)
+    loss: 'binary_crossentropy'                     # loss function - use categorical_crossentropy instead ?
+    metrics: ['accuracy']                           # measure accuracy during training
+    batch_size: 500                   
+    epochs: 100                                      # number of training epochs
+
+laman_dnn:
+
+    # Model hyperparameters
+    learning_rate: [0.001]                           # (0.001 cf 1810.05165)
+    loss: 'binary_crossentropy'                     # loss function - use categorical_crossentropy instead ?
+    metrics: ['accuracy']                           # measure accuracy during training
+    batch_size: 500                   
+    epochs: 100                                      # number of training epochs
+    
+   
+nsub_dnn:
+
+    # Model hyperparameters
+    learning_rate: [1., 0.1, 0.01, 1.e-3, 1.e-4]    # (0.001 cf 1810.05165)
+    loss: 'binary_crossentropy'                     # loss function - use categorical_crossentropy instead ?
+    metrics: ['accuracy']                           # measure accuracy during training
+    batch_size: 500                    
+    epochs: 30                                      # number of training epochs
+    
+nsub_linear:
+
+    # Model hyperparameters -- SGDClassifier
+    sgd_loss: 'hinge'                               # cost function
+    sgd_penalty: ['l2', 'l1']                       # regularization term
+    sgd_alpha: [1e-5, 1e-4, 1e-3]                   # regularization strength
+    sgd_max_iter: 1000                              # max number of epochs
+    sgd_tol: [1e-5, 1e-4, 1e-3]                     # criteria to stop training
+    sgd_learning_rate: 'optimal'                    # learning schedule (learning rate decreases over time in proportion to alpha)
+    sgd_early_stopping: False                       # whether to stop training based on validation score
+
+    lda_tol: [1e-6, 1e-5, 1e-4, 1e-3, 5e-3, 1e-2]   # criteria to stop training
+
+    # Hyperparameter tuning
+    n_iter: 10                                      # number of random hyperparameter sets to try
+    cv: 5                                           # number of cross-validation folds
