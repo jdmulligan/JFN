@@ -12,31 +12,32 @@
 
 dataset_type: 'Zjet'
 
-# We will loop over all .root files in the following directories that contain the specified filepattern
-Z_jet_dir: '/rstorage/jfn/mateusz/new_z/'
-QCD_jet_dir: '/rstorage/jfn/mateusz/new_q_g'
-Z_jet_filepattern: 'pythia_gen_qorgorZjet_mDT0.04_Zjet'
-QCD_jet_filepattern_quark: 'pythia_parton_tag_quark'
-QCD_jet_filepattern_gluon: 'pythia_parton_tag_glue'
-R: 1.0
-pt: [500., 550.]
-y_max: 1.71
+# Some parameters of the Z-QCD dataset
 
-# Size of q-g labeled data to load
-n_total: 50000
+R: 0.8
+pt: [1000.,1100.] # The choices are [300, 350], [500, 550], [1000, 1050], [1000, 1100]
+y_max: 1.71
+mj_min: 0
+mj_max: 225
+
+# Size of q-g labeled data to load, it has to be a multiple of 1000
+n_total: 10000
+
+# Load laman
+laman: 'True'
 
 # Nsubjettiness basis
-K_max: 2
+K_max: 4
 
 # Subjet basis: 'exclusive' or 'inclusive'
 subjet_basis: 'inclusive'
 
-# 1. Exclusive, fixed number of jets; It must be in the form of a list . Note: using the anti-kt alg. here gives a warning from fastjet
-njet: [100]
+# 1. Exclusive, fixed number of jets; It must be in the form of a list. Note: using the anti-kt alg. here gives a warning from fastjet
+njet: [100, 50, 12, 8]
 
 # 2. Inclusive. Fixed value for the subjet radius; It must be in the form of a list. Choose radii r and cutoff N_max
-N_max: [30]
-r: [0.1]
+N_max: [20]
+r: [0.001]
 
 # Clustering Algorithm, The options are: 'kt_algorithm', 'antikt_algorithm' ,'cambridge_algorithm' 
 Clustering_Alg: 'antikt_algorithm' 
@@ -52,9 +53,9 @@ Herwig_dataset : 'False'
 #------------------------------------------------------------------
 
 # Size of q-g labeled data to load
-n_train: 1600000
-n_val:   200000
-n_test:  200000
+n_train: 8000
+n_val:   1000
+n_test:  1000
 
 # Classification labels
 q_label: 'Z'                                      # label 1
@@ -62,10 +63,10 @@ g_label: 'QCD'                                    # label 0
 
 # Define Nsubjettiness observable basis sets to train models
 # The K-body phase space is (3K-4)-dimensional
-K: [2]
+K: [2,4]
 
 # Select model: pfn, sub_pfn, efn, particle_gnn, sub_dnn, laman_dnn, nsub_dnn, nsub_linear
-models: [pfn, sub_pfn]
+models: [sub_pfn]
 
 pfn:
 
@@ -74,7 +75,7 @@ pfn:
     F_sizes: [100, 100, 100]
 
     # Network training parameters
-    epochs: 100
+    epochs: 30
     batch_size: 500
     use_pids: True                                  # Use PID information (this option is currently ignored)
 
@@ -85,7 +86,7 @@ sub_pfn:
     F_sizes: [100, 100, 100]
 
     # Network training parameters
-    epochs: 100
+    epochs: 30
     batch_size: 500
     use_pids: False                                 
     
