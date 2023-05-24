@@ -42,6 +42,7 @@ import energyflow.archs
 # Data analysis and plotting
 import pandas as pd
 import numpy as np
+import statistics
 from matplotlib import pyplot as plt
 import seaborn as sns
 sns.set_context('paper', rc={'font.size':18,'axes.titlesize':18,'axes.labelsize':18})
@@ -123,8 +124,8 @@ class AnalyzeQG(common_base.CommonBase):
             self.N_list = hf['N_list'][:]
             self.beta_list = hf['beta_list'][:]
             self.r_list = hf['r_list'][:]
-
-
+            self.N_cluster_list = hf['N_clustering'][:]
+        
         # We require njet and Nmax are a list 
         if type(self.njet_list) != list:
             print(f'ERROR: njet must be a list')
@@ -137,20 +138,20 @@ class AnalyzeQG(common_base.CommonBase):
 
         # Based on the subjet basis choose the appropriate max number of subjets
         if self.subjet_basis == 'inclusive':
-            self.N_cluster_list = self.N_max_list
+            self.N_cluster_list_config = self.N_max_list
         elif self.subjet_basis == 'exclusive':
-            self.N_cluster_list = self.njet_list
+            self.N_cluster_list_config = self.njet_list
         else:
             sys.exit(f'ERROR: Invalid choice for subjet_basis')
 
         
         # For 'exclusive' we need to make sure we don't lose information so we need r=0.4
         if self.subjet_basis == 'exclusive':
-            if self.r_list != [0.4]:
-                    print('ERROR: Wrong subjet radius r. For exlusive basis we need r = 0.4')
+            if self.r_list != [self.R]:
+                    print(f'ERROR: Wrong subjet radius r. For exlusive basis we need r = {self.R}')
                     print()
-                    print('Changing radius to r = 0.4')
-                    self.r_list = [0.4]
+                    print(f'Changing radius to r = {self.R}')
+                    self.r_list = [self.R]
 
         self.qa_observables = ['jet_pt', 'jet_angularity', 'thrust', 'LHA', 'pTD', 'jet_mass', 'jet_theta_g', 'zg', 'multiplicity_0000', 'multiplicity_0150', 'multiplicity_0500', 'multiplicity_1000']
             
@@ -199,17 +200,22 @@ class AnalyzeQG(common_base.CommonBase):
         self.test_frac = 1. * self.n_test / self.n_total
         self.val_frac = 1. * self.n_val / (self.n_train + self.n_val)
 
+
         self.random_state = None  # seed for shuffling data (set to an int to have reproducible results)
         
         # Clustering Algorithm 
         self.Clustering_Alg = config['Clustering_Alg']
 
         #Laman Construction
+        self.laman_load = config['laman']
         self.Laman_construction = config['Laman_construction']
+
+        # Fully connected gnn on hadrons
+        self.fully_con_subjets = config['fully_con_subjets']
 
         # Load Herwig Dataset: Boolean variable
         self.Herwig_dataset = config['Herwig_dataset']
-
+        
         # Subjet Basis
         self.r_list = config['r'] # This is not necessary since the r_list is read from the output dir in the __init__
         self.subjet_basis = config['subjet_basis']
@@ -262,6 +268,13 @@ class AnalyzeQG(common_base.CommonBase):
                 self.model_settings[model]['epochs'] = config[model]['epochs']
                 self.model_settings[model]['batch_size'] = config[model]['batch_size']
                 self.model_settings[model]['learning_rate'] = config[model]['learning_rate']
+            
+            if model == 'sub_efn':
+                self.model_settings[model]['Phi_sizes'] = tuple(config[model]['Phi_sizes'])
+                self.model_settings[model]['F_sizes'] = tuple(config[model]['F_sizes'])
+                self.model_settings[model]['epochs'] = config[model]['epochs']
+                self.model_settings[model]['batch_size'] = config[model]['batch_size']
+                self.model_settings[model]['learning_rate'] = config[model]['learning_rate']
 
             if 'gnn' in model:
                 self.model_settings[model]['epochs'] = config[model]['epochs']
@@ -273,7 +286,7 @@ class AnalyzeQG(common_base.CommonBase):
     def analyze_qg(self):
     
         # Clear variables
-        self.AUC = {}
+        self.AUC, self.AUC_av, self.AUC_std = {}, {}, {}
         self.units = {} # To save the hidden layers' size that keras.tuner calculated
         self.epochs = {} # If we use early stopping we need to know how many epochs were run
         self.y = None
@@ -289,16 +302,26 @@ class AnalyzeQG(common_base.CommonBase):
             self.subjet_input_total={}
             for r in self.r_list:
                 for N_cluster in self.N_cluster_list:
-                    self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_edges'] = hf[f'subjet_r{r}_N{N_cluster}_edges'][:]
-                    self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_angles'] = hf[f'subjet_r{r}_N{N_cluster}_angles'][:]
-                    self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_z'] = hf[f'subjet_r{r}_N{N_cluster}_z'][:]
-                    self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_sub_phi'] = hf[f'subjet_r{r}_N{N_cluster}_sub_phi'][:]
-                    self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_sub_rap'] = hf[f'subjet_r{r}_N{N_cluster}_sub_rap'][:]
-
+                    
+                    if self.laman_load == 'True':
+                        self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_edges'] = hf[f'subjet_r{r}_N{N_cluster}_edges'][:]
+                        self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_angles'] = hf[f'subjet_r{r}_N{N_cluster}_angles'][:]
+                    #print("here")
+                    #print(hf[f'subjet_r{r}_N{N_cluster}_z'].shape)
+                    N = N_cluster # Change this if you want to load N<N_cluster particles. e.g. N=2 and not all the subjets
+                    self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_z'] = hf[f'subjet_r{r}_N{N_cluster}_z'][:,:N]
+                    self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_sub_phi'] = hf[f'subjet_r{r}_N{N_cluster}_sub_phi'][:,:N]
+                    self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_sub_rap'] = hf[f'subjet_r{r}_N{N_cluster}_sub_rap'][:,:N]
+                    #print(self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_z'].shape)
+                    #print(self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_z'][0])
+                    self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_z'] = np.true_divide(self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_z'], np.sum(self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_z'], axis=1)[:,None])
+                    #print(self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_z'][0])
+                    
                     
                     if self.Herwig_dataset == 'True':
                         self.y_herwig_total = hf[f'y_herwig'][:]
-                        self.subjet_input_total[f'subjet_herwig_r{r}_N{N_cluster}_angles'] = hf[f'subjet_herwig_r{r}_N{N_cluster}_angles'][:]
+                        if self.laman_load == 'True':
+                            self.subjet_input_total[f'subjet_herwig_r{r}_N{N_cluster}_angles'] = hf[f'subjet_herwig_r{r}_N{N_cluster}_angles'][:]
                         self.subjet_input_total[f'subjet_herwig_r{r}_N{N_cluster}_z'] = hf[f'subjet_herwig_r{r}_N{N_cluster}_z'][:]
                         self.subjet_input_total[f'subjet_herwig_r{r}_N{N_cluster}_sub_phi'] = hf[f'subjet_herwig_r{r}_N{N_cluster}_sub_phi'][:]
                         self.subjet_input_total[f'subjet_herwig_r{r}_N{N_cluster}_sub_rap'] = hf[f'subjet_herwig_r{r}_N{N_cluster}_sub_rap'][:]
@@ -332,8 +355,9 @@ class AnalyzeQG(common_base.CommonBase):
             self.subjet_input_balanced={}
             for r in self.r_list:
                 for N_cluster in self.N_cluster_list:
-                    self.subjet_input_balanced[f'subjet_r{r}_N{N_cluster}_edges'] = np.delete(self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_edges'], indices_to_remove, axis=0) 
-                    self.subjet_input_balanced[f'subjet_r{r}_N{N_cluster}_angles'] = np.delete(self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_angles'], indices_to_remove, axis=0) 
+                    if self.laman_load == 'True':
+                        self.subjet_input_balanced[f'subjet_r{r}_N{N_cluster}_edges'] = np.delete(self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_edges'], indices_to_remove, axis=0) 
+                        self.subjet_input_balanced[f'subjet_r{r}_N{N_cluster}_angles'] = np.delete(self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_angles'], indices_to_remove, axis=0) 
                     self.subjet_input_balanced[f'subjet_r{r}_N{N_cluster}_z'] = np.delete(self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_z'], indices_to_remove, axis=0) 
                     self.subjet_input_balanced[f'subjet_r{r}_N{N_cluster}_sub_phi'] = np.delete(self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_sub_phi'], indices_to_remove, axis=0) 
                     self.subjet_input_balanced[f'subjet_r{r}_N{N_cluster}_sub_rap'] = np.delete(self.subjet_input_total[f'subjet_r{r}_N{N_cluster}_sub_rap'], indices_to_remove, axis=0) 
@@ -350,8 +374,9 @@ class AnalyzeQG(common_base.CommonBase):
                 self.subjet_input_shuffled={}
                 for r in self.r_list:
                     for N_cluster in self.N_cluster_list:
-                        self.subjet_input_shuffled[f'subjet_r{r}_N{N_cluster}_edges'] = self.subjet_input_balanced[f'subjet_r{r}_N{N_cluster}_edges'][idx]
-                        self.subjet_input_shuffled[f'subjet_r{r}_N{N_cluster}_angles'] = self.subjet_input_balanced[f'subjet_r{r}_N{N_cluster}_angles'][idx]
+                        if self.laman_load == 'True':
+                            self.subjet_input_shuffled[f'subjet_r{r}_N{N_cluster}_edges'] = self.subjet_input_balanced[f'subjet_r{r}_N{N_cluster}_edges'][idx]
+                            self.subjet_input_shuffled[f'subjet_r{r}_N{N_cluster}_angles'] = self.subjet_input_balanced[f'subjet_r{r}_N{N_cluster}_angles'][idx]
                         self.subjet_input_shuffled[f'subjet_r{r}_N{N_cluster}_z'] = self.subjet_input_balanced[f'subjet_r{r}_N{N_cluster}_z'][idx]
                         self.subjet_input_shuffled[f'subjet_r{r}_N{N_cluster}_sub_phi'] = self.subjet_input_balanced[f'subjet_r{r}_N{N_cluster}_sub_phi'][idx]
                         self.subjet_input_shuffled[f'subjet_r{r}_N{N_cluster}_sub_rap'] = self.subjet_input_balanced[f'subjet_r{r}_N{N_cluster}_sub_rap'][idx]
@@ -363,13 +388,13 @@ class AnalyzeQG(common_base.CommonBase):
             # Truncate the input arrays to the requested size
             self.y = y_shuffled[:self.n_total]
             self.X_Nsub = X_Nsub_shuffled[:self.n_total]
-            
 
             self.subjet_input={}
             for r in self.r_list:
                 for N_cluster in self.N_cluster_list:
-                    self.subjet_input[f'subjet_r{r}_N{N_cluster}_edges'] = self.subjet_input_shuffled[f'subjet_r{r}_N{N_cluster}_edges'][:self.n_total]
-                    self.subjet_input[f'subjet_r{r}_N{N_cluster}_angles'] = self.subjet_input_shuffled[f'subjet_r{r}_N{N_cluster}_angles'][:self.n_total]
+                    if self.laman_load == 'True':
+                        self.subjet_input[f'subjet_r{r}_N{N_cluster}_edges'] = self.subjet_input_shuffled[f'subjet_r{r}_N{N_cluster}_edges'][:self.n_total]
+                        self.subjet_input[f'subjet_r{r}_N{N_cluster}_angles'] = self.subjet_input_shuffled[f'subjet_r{r}_N{N_cluster}_angles'][:self.n_total]
                     self.subjet_input[f'subjet_r{r}_N{N_cluster}_z'] = self.subjet_input_shuffled[f'subjet_r{r}_N{N_cluster}_z'][:self.n_total]
                     self.subjet_input[f'subjet_r{r}_N{N_cluster}_sub_phi'] = self.subjet_input_shuffled[f'subjet_r{r}_N{N_cluster}_sub_phi'][:self.n_total]
                     self.subjet_input[f'subjet_r{r}_N{N_cluster}_sub_rap'] = self.subjet_input_shuffled[f'subjet_r{r}_N{N_cluster}_sub_rap'][:self.n_total]
@@ -416,11 +441,14 @@ class AnalyzeQG(common_base.CommonBase):
             for N_cluster in self.N_cluster_list:
                 
                 # Split into Train and Test sets for Laman DNN
-                self.X_laman_train[f'r{r}_N{N_cluster}'],self.X_laman_test[f'r{r}_N{N_cluster}'],self.y_laman_train[f'r{r}_N{N_cluster}'],self.y_laman_test[f'r{r}_N{N_cluster}'] =  sklearn.model_selection.train_test_split(np.concatenate((self.subjet_input[f'subjet_r{r}_N{N_cluster}_z'], self.subjet_input[f'subjet_r{r}_N{N_cluster}_angles']),axis=1), self.y, test_size=self.test_frac)
+                if self.laman_load == 'True':
+                    self.X_laman_train[f'r{r}_N{N_cluster}'],self.X_laman_test[f'r{r}_N{N_cluster}'],self.y_laman_train[f'r{r}_N{N_cluster}'],self.y_laman_test[f'r{r}_N{N_cluster}'] =  sklearn.model_selection.train_test_split(np.concatenate((self.subjet_input[f'subjet_r{r}_N{N_cluster}_z'], self.subjet_input[f'subjet_r{r}_N{N_cluster}_angles']),axis=1), self.y, test_size=self.test_frac)
             
                 # Use as input to the Sub DNN (pt_1, η_1, φ_1,...,pt_n, η_n, φ_n) instead of (pt_1,...,pt_n, η_1,...η_n, φ_1, ... , φ_n)
                 self.x_subjet_combined = []
-                for n in range(N_cluster):
+
+                N = N_cluster # Change this if you want to load N<N_cluster particles. e.g. N=2 and not all the subjets
+                for n in range(N):
                     self.x_subjet_combined.append(np.array(self.subjet_input[f'subjet_r{r}_N{N_cluster}_z'][:,n]))
                     self.x_subjet_combined.append(np.array(self.subjet_input[f'subjet_r{r}_N{N_cluster}_sub_phi'][:,n]))
                     self.x_subjet_combined.append(np.array(self.subjet_input[f'subjet_r{r}_N{N_cluster}_sub_rap'][:,n]))
@@ -453,7 +481,7 @@ class AnalyzeQG(common_base.CommonBase):
         self.plot_QA()
 
         # Plot first few K (before and after scaling)
-        if 'dnn' in self.models and K == 3:
+        if 'nsub_dnn' in self.models and K == 3:
             self.plot_nsubjettiness_distributions(K, self.training_data[K]['X_Nsub_train'], self.y_train, self.training_data[K]['feature_labels'], 'before_scaling')
             self.plot_nsubjettiness_distributions(K, sklearn.preprocessing.scale(self.training_data[K]['X_Nsub_train']), self.y_train, self.training_data[K]['feature_labels'], 'after_scaling')
 
@@ -473,6 +501,8 @@ class AnalyzeQG(common_base.CommonBase):
         print(f'Clustering Algorithm : {self.Clustering_Alg}')
         print(f'Laman Construction : {self.Laman_construction}')
         print(f'AUC : {self.AUC}' )
+        print(f'AUC_av : {self.AUC_av}' )
+        print(f'AUC_std : {self.AUC_std}' )
         if 'laman_dnn' in self.models and 'sub_dnn' in self.models:
             self.diff = np.array(self.AUC['laman_dnn']) - np.array(self.AUC['sub_dnn']) 
             print(f'AUC Difference Laman - Sub : {self.diff}')
@@ -492,7 +522,7 @@ class AnalyzeQG(common_base.CommonBase):
             print()
         
             # Dict to store AUC
-            self.AUC[model] = []
+            self.AUC[model], self.AUC_av[model], self.AUC_std[model] = [], [], []
         
             model_settings = self.model_settings[model]
 
@@ -525,6 +555,8 @@ class AnalyzeQG(common_base.CommonBase):
                     #Subjet PFN 
                     if model == 'sub_pfn':
                         self.fit_sub_pfn(model, model_settings, r, N_cluster)
+                    if model == 'sub_efn':
+                        self.fit_sub_efn(model, model_settings, r, N_cluster)
 
         # Plot traditional observables
         for observable in self.qa_observables:
@@ -577,42 +609,46 @@ class AnalyzeQG(common_base.CommonBase):
         for r in self.r_list:
                 for N in self.N_cluster_list:
                     graph_list[f'subjet_r{r}_N{N}'] = []
-
+        print()
+        print(X)
+        print()
+        print(X[3999])
+        print()
+        print(len(X))
         # Loop over all jets
         for i, xp in enumerate(X):
-
-            # 1. Get node feature vector 
-            #    First need to remove zero padding
-            xp = xp[~np.all(xp == 0, axis=1)]
-            node_features = torch.tensor(xp,dtype=torch.float)
-
-            # 2. Get adjacency matrix / edge indices
             
-            # Fully connected graph 
-            adj_matrix = np.ones((xp.shape[0],xp.shape[0])) - np.identity((xp.shape[0]))
-            row, col = np.where(adj_matrix)
-            
-            # Use sparse COO format
-            coo = np.array(list(zip(row,col)))
+            if self.fully_con_subjets :
+                # 1. Get node feature vector 
+                #    First need to remove zero padding
+                xp = xp[~np.all(xp == 0, axis=1)]
+                node_features = torch.tensor(xp,dtype=torch.float)
 
-            #    Switch format
-            
-            edge_indices = torch.tensor(coo)
-            edge_indices_long = edge_indices.t().to(torch.long).view(2, -1) #long .. ?!
+                # 2. Get adjacency matrix / edge indices
+                
+                # Fully connected graph 
+                adj_matrix = np.ones((xp.shape[0],xp.shape[0])) - np.identity((xp.shape[0]))
+                row, col = np.where(adj_matrix)
+                
+                # Use sparse COO format
+                coo = np.array(list(zip(row,col)))
 
-            #    or can use this directly: edge_indices_full_conn = torch.tensor([row,col],dtype=torch.long) 
+                #    Switch format
+                edge_indices = torch.tensor(coo)
+                edge_indices_long = edge_indices.t().to(torch.long).view(2, -1) #long .. ?!
 
-            # 3. Can add edge features later on ...
+                #    or can use this directly: edge_indices_full_conn = torch.tensor([row,col],dtype=torch.long) 
 
-            # 4. Get graph label
-            graph_label = torch.tensor(Y[i],dtype=torch.int64)
+                # 3. Can add edge features later on ...
 
-            # 5. Create PyG data object
-            graph = torch_geometric.data.Data(x=node_features, edge_index=edge_indices_long, edge_attr=None, y=graph_label).to(self.torch_device)
+                # 4. Get graph label
+                graph_label = torch.tensor(Y[i],dtype=torch.int64)
 
-            # 6. Add to list of graphs
-            graph_list_fullycon.append(graph)
+                # 5. Create PyG data object
+                graph = torch_geometric.data.Data(x=node_features, edge_index=edge_indices_long, edge_attr=None, y=graph_label).to(self.torch_device)
 
+                # 6. Add to list of graphs
+                graph_list_fullycon.append(graph)
 
             # Laman Graph
             for r in self.r_list:
@@ -650,93 +686,95 @@ class AnalyzeQG(common_base.CommonBase):
 
                     graph_list[f'subjet_r{r}_N{N}'].append(graph)
                
+        if self.fully_con_subjets:
+            # 7. Create PyG batch object that contains all the graphs and labels
+            graph_batch = torch_geometric.data.Batch().from_data_list(graph_list_fullycon)
 
-        # 7. Create PyG batch object that contains all the graphs and labels
-        graph_batch = torch_geometric.data.Batch().from_data_list(graph_list_fullycon)
+            # Print
+            print(f'Number of graphs in PyG batch object: {graph_batch.num_graphs}')
+            print(f'Graph batch structure: {graph_batch}') # It says "DataDataBatch" .. correct?
 
-        # Print
-        print(f'Number of graphs in PyG batch object: {graph_batch.num_graphs}')
-        print(f'Graph batch structure: {graph_batch}') # It says "DataDataBatch" .. correct?
+            # [Check the format that is required by the GNN classifier!!]
+            # [Fully connected edge index, ok: N*(N-1) = 18 * 17 = 306 ]
 
-        # [Check the format that is required by the GNN classifier!!]
-        # [Fully connected edge index, ok: N*(N-1) = 18 * 17 = 306 ]
+            # Visualize one of the jet graphs as an example ...
+            # Are the positions adjusted if we include edge features?
+            vis = torch_geometric.utils.convert.to_networkx(graph_batch[3],to_undirected=True) #... undirected graph?
+            plt.figure(1,figsize=(10,10))
+            networkx.draw(vis,cmap=plt.get_cmap('Set2'),node_size=10,linewidths=6)
+            plt.savefig(os.path.join(self.output_dir, 'jet_graph.pdf'))
+            plt.close()
 
-        # Visualize one of the jet graphs as an example ...
-        # Are the positions adjusted if we include edge features?
-        vis = torch_geometric.utils.convert.to_networkx(graph_batch[3],to_undirected=True) #... undirected graph?
-        plt.figure(1,figsize=(10,10))
-        networkx.draw(vis,cmap=plt.get_cmap('Set2'),node_size=10,linewidths=6)
-        plt.savefig(os.path.join(self.output_dir, 'jet_graph.pdf'))
-        plt.close()
+            # Check adjacency of the first jet
+            print()
+            print(f'adjacency of first jet: {graph_batch[0].edge_index}')
+            print()
 
-        # Check adjacency of the first jet
-        print()
-        print(f'adjacency of first jet: {graph_batch[0].edge_index}')
-        print()
+            # Check a few things .. 
+            # 1. Graph batch
+            print(f'Number of graphs: {graph_batch.num_graphs}') # correct number ...??
+            print(f'Number of features: {graph_batch.num_features}') # ok
+            print(f'Number of node features: {graph_batch.num_node_features}') # ok
+            #print(f'Number of classes: {graph_batch.num_classes}') # .. labels?? print(graph_batch.y)
 
-        # Check a few things .. 
-        # 1. Graph batch
-        print(f'Number of graphs: {graph_batch.num_graphs}') # correct number ...??
-        print(f'Number of features: {graph_batch.num_features}') # ok
-        print(f'Number of node features: {graph_batch.num_node_features}') # ok
-        #print(f'Number of classes: {graph_batch.num_classes}') # .. labels?? print(graph_batch.y)
+            # 2. A particular graph
+            print(f'Number of nodes: {graph_batch[1].num_nodes}') # ok
+            print(f'Number of edges: {graph_batch[1].num_edges}') # ok, 17*16=272
+            print(f'Has self-loops: {graph_batch[1].has_self_loops()}') # ok
+            print(f'Is undirected: {graph_batch[1].is_undirected()}') # ok
 
-        # 2. A particular graph
-        print(f'Number of nodes: {graph_batch[1].num_nodes}') # ok
-        print(f'Number of edges: {graph_batch[1].num_edges}') # ok, 17*16=272
-        print(f'Has self-loops: {graph_batch[1].has_self_loops()}') # ok
-        print(f'Is undirected: {graph_batch[1].is_undirected()}') # ok
+            # Shuffle and split into training and test set
+            #graph_batch = graph_batch.shuffle() # seems like I have the wrong format ...
 
-        # Shuffle and split into training and test set
-        #graph_batch = graph_batch.shuffle() # seems like I have the wrong format ...
+            train_dataset = graph_batch[:self.n_train] # ok ...
+            test_dataset = graph_batch[self.n_train:]
 
-        train_dataset = graph_batch[:self.n_train] # ok ...
-        test_dataset = graph_batch[self.n_train:]
+            print(f'Number of training graphs: {len(train_dataset)}') # now ok, doesn't work for graph_batch ...?
+            print(f'Number of test graphs: {len(test_dataset)}')
 
-        print(f'Number of training graphs: {len(train_dataset)}') # now ok, doesn't work for graph_batch ...?
-        print(f'Number of test graphs: {len(test_dataset)}')
+            # Group graphs into mini-batches for parallelization (..?)
+            train_loader = torch_geometric.loader.DataLoader(train_dataset, batch_size=model_settings['batch_size'], shuffle=True)
+            test_loader = torch_geometric.loader.DataLoader(test_dataset, batch_size=model_settings['batch_size'], shuffle=False)
 
-        # Group graphs into mini-batches for parallelization (..?)
-      #  train_loader = torch_geometric.loader.DataLoader(train_dataset, batch_size=model_settings['batch_size'], shuffle=True)
-       # test_loader = torch_geometric.loader.DataLoader(test_dataset, batch_size=model_settings['batch_size'], shuffle=False)
+            # Set up GNN structure
+            # 1. Embed each node by performing multiple rounds of message passing
+            # 2. Aggregate node embeddings into a unified graph embedding (readout layer)
+            # 3. Train a final classifier on the graph embedding
+            
+            gnn_model = GCN_class(graph_batch, hidden_channels = 64)  # TO DO: In order to train this model with the Laman w/ edge_attr we need to add a new train_gnn -> 
+            print(gnn_model)
+            gnn_model = gnn_model.to(self.torch_device)
+            #print(f'gnn_model is_cuda: {gnn_model.is_cuda}')
 
-        # Set up GNN structure
-        # 1. Embed each node by performing multiple rounds of message passing
-        # 2. Aggregate node embeddings into a unified graph embedding (readout layer)
-        # 3. Train a final classifier on the graph embedding
-        
-        #gnn_model = GCN_class(graph_batch, hidden_channels = 64)  # TO DO: In order to train this model with the Laman w/ edge_attr we need to add a new train_gnn -> 
-        #print(gnn_model)
+            # Now train the fully connected GNN
+            optimizer = torch.optim.Adam(gnn_model.parameters(), lr=0.001)
+            criterion = torch.nn.CrossEntropyLoss()
 
-        # Now train the fully connected GNN
-       # optimizer = torch.optim.Adam(gnn_model.parameters(), lr=0.001)
-        #criterion = torch.nn.CrossEntropyLoss()
+            for epoch in range(1, model_settings['epochs']): # -> 171
+                self.train_gnn(train_loader, gnn_model, optimizer, criterion, False)
+                train_acc = self.test_gnn(train_loader, gnn_model, False)
+                test_acc = self.test_gnn(test_loader, gnn_model, False)
+                print(f'Epoch: {epoch:02d}, Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}')
 
-        #for epoch in range(1, model_settings['epochs']): # -> 171
-         #   self.train_gnn(train_loader, gnn_model, optimizer, criterion)
-          #  train_acc = self.test_gnn(train_loader, gnn_model)
-           # test_acc = self.test_gnn(test_loader, gnn_model)
-           # print(f'Epoch: {epoch:02d}, Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}')
+            # Get AUC & ROC curve for the fully connected GNN
+            for i, datatest in enumerate(test_loader):  # Iterate in batches over the test dataset.
+                pred_graph = gnn_model(datatest.x, datatest.edge_index, datatest.batch).data # '.data' removes the 'grad..' from the torch tensor
+                pred_graph = pred_graph.cpu().data.numpy() # Convert predictions to np.array. Not: values not in [0,1]
+                label_graph = datatest.y.cpu().data.numpy() # Get labels
 
-        # Get AUC & ROC curve for the fully connected GNN
-      #  for i, datatest in enumerate(test_loader):  # Iterate in batches over the test dataset.
-       #     pred_graph = gnn_model(datatest.x, datatest.edge_index, datatest.batch).data # '.data' removes the 'grad..' from the torch tensor
-        #    pred_graph = pred_graph.numpy() # Convert predictions to np.array. Not: values not in [0,1]
-         #   label_graph = datatest.y.numpy() # Get labels
+                if i==0:
+                    pred_graphs = pred_graph
+                    label_graphs = label_graph
+                else:
+                    pred_graphs = np.concatenate((pred_graphs,pred_graph),axis=0)
+                    label_graphs = np.concatenate((label_graphs,label_graph),axis=0)
 
-          #  if i==0:
-           #     pred_graphs = pred_graph
-            #    label_graphs = label_graph
-            #else:
-             #   pred_graphs = np.concatenate((pred_graphs,pred_graph),axis=0)
-              #  label_graphs = np.concatenate((label_graphs,label_graph),axis=0)
+            # get AUC
+            gnn_auc = sklearn.metrics.roc_auc_score(label_graphs, pred_graphs[:,1])
+            print(f'Fully connected GNN AUC based on particle four-vectors is: {gnn_auc}')
 
-        # get AUC
-      #  gnn_auc = sklearn.metrics.roc_auc_score(label_graphs, pred_graphs[:,1])
-       # print(f'Fully connected GNN AUC based on particle four-vectors is: {gnn_auc}')
-
-        # get ROC curve for the fully connected GNN
-        #self.roc_curve_dict[model] = sklearn.metrics.roc_curve(label_graphs, pred_graphs[:,1])
+            # get ROC curve for the fully connected GNN
+            self.roc_curve_dict[model] = sklearn.metrics.roc_curve(label_graphs, pred_graphs[:,1])
 
         for r in self.r_list:
                 for N in self.N_cluster_list:
@@ -799,17 +837,37 @@ class AnalyzeQG(common_base.CommonBase):
                     optimizer = torch.optim.Adam(gnn_model.parameters(), lr=0.01)
                     criterion = torch.nn.CrossEntropyLoss()
 
+                    self.best_valid_acc = 0
+                    last_epochs = 0
+                    self.patience_gnn = 4
                     for epoch in range(1, model_settings['epochs'] + 1): # -> 171
-                        loss_train = self.train_gnn(train_loader, gnn_model, optimizer, criterion)
-                        train_acc = self.test_gnn(train_loader, gnn_model)
-                        test_acc = self.test_gnn(test_loader, gnn_model)
-                        print(f'Epoch: {epoch:02d}, Train Loss: {loss_train:.4f},  Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}')
+                        time_start = time.time()
+                        loss_train = self.train_gnn(train_loader, gnn_model, optimizer, criterion, True)
+                        train_acc = self.test_gnn(train_loader, gnn_model, True)
+                        test_acc = self.test_gnn(test_loader, gnn_model, True)
+                        time_end = time.time()
+                        print(f'Epoch: {epoch:02d}, Train Loss: {loss_train:.4f},  Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}, Duration: {time_end-time_start}')
+
+                        if test_acc > self.best_valid_acc:
+                            last_epochs = 0
+                            self.best_valid_acc = test_acc
+                            # Save the best model
+                            torch.save(gnn_model.state_dict(), 'best-model-parameters.pt')
+
+                        if last_epochs >= self.patience_gnn:
+                            print(f"Ending training after {epoch} epochs due to performance saturation with a patience parameter of {self.patience_gnn} epochs")
+                            break
+
+                        last_epochs += 1
+                    
+                    # Use the best model
+                    gnn_model.load_state_dict(torch.load('best-model-parameters.pt'))
 
                     # Get AUC & ROC curve
                     for i, datatest in enumerate(test_loader):  # Iterate in batches over the test dataset.
                         pred_graph = gnn_model(datatest.x, datatest.edge_index, datatest.batch, datatest.edge_attr).data # '.data' removes the 'grad..' from the torch tensor
-                        pred_graph = pred_graph.numpy() # Convert predictions to np.array. Not: values not in [0,1]
-                        label_graph = datatest.y.numpy() # Get labels
+                        pred_graph = pred_graph.cpu().data.numpy() # Convert predictions to np.array. Not: values not in [0,1]
+                        label_graph = datatest.y.cpu().data.numpy() # Get labels
 
                         if i==0:
                             pred_graphs = pred_graph
@@ -820,22 +878,27 @@ class AnalyzeQG(common_base.CommonBase):
 
                     # get AUC
                     gnn_auc = sklearn.metrics.roc_auc_score(label_graphs, pred_graphs[:,1])
+                    print()
                     print(f'Laman GNN with r={r}, N={N} : AUC based on particle four-vectors is: {gnn_auc}')
+
                     self.AUC[f'{model}'].append(gnn_auc)
 
         print(f'--- runtime: {time.time() - start_time} seconds ---')
         print()
 
     #---------------------------------------------------------------
-    def train_gnn(self, train_loader, gnn_model, optimizer, criterion):
+    def train_gnn(self, train_loader, gnn_model, optimizer, criterion, edge_attr_boolean):
         gnn_model.train()
 
         loss_cum=0
 
         for data in train_loader:  # Iterate in batches over the training dataset.
 
-            data = data.to_device(self.torch_device)
-            out = gnn_model(data.x, data.edge_index, data.batch, data.edge_attr)  # Perform a single forward pass.
+            data = data.to(self.torch_device)
+            if edge_attr_boolean:
+                out = gnn_model(data.x, data.edge_index, data.batch, data.edge_attr)  # Perform a single forward pass.
+            else: 
+                out = gnn_model(data.x, data.edge_index, data.batch)
             loss = criterion(out, data.y)  # Compute the loss.
             loss_cum += loss.item() #Cumulative loss
             loss.backward()  # Derive gradients.
@@ -845,13 +908,16 @@ class AnalyzeQG(common_base.CommonBase):
         return loss_cum/len(train_loader)
 
     #---------------------------------------------------------------
-    def test_gnn(self, loader, gnn_model):
+    def test_gnn(self, loader, gnn_model, edge_attr_boolean):
         gnn_model.eval()
 
         correct = 0
         for data in loader:  # Iterate in batches over the training/test dataset.
-            data = data.to_device(self.torch_device)
-            out = gnn_model(data.x, data.edge_index, data.batch, data.edge_attr)  
+            data = data.to(self.torch_device)
+            if edge_attr_boolean:
+                out = gnn_model(data.x, data.edge_index, data.batch, data.edge_attr)  # Perform a single forward pass.
+            else: 
+                out = gnn_model(data.x, data.edge_index, data.batch)
             pred = out.argmax(dim=1)  # Use the class with highest probability.
             correct += int((pred == data.y).sum())  # Check against ground-truth labels.
         return correct / len(loader.dataset)  # Derive ratio of correct predictions.
@@ -1111,7 +1177,7 @@ class AnalyzeQG(common_base.CommonBase):
 
         tuner = keras_tuner.Hyperband(functools.partial(self.dnn_builder, input_shape=[X_train.shape[1]], model_settings=model_settings),
                                         objective='val_accuracy',
-                                        max_epochs=15,
+                                        max_epochs=3,
                                         factor=3,
                                         directory='keras_tuner',
                                         project_name=f'{model} with r = {r}, N = {N}')
@@ -1138,7 +1204,7 @@ class AnalyzeQG(common_base.CommonBase):
         hypermodel = tuner.hypermodel.build(best_hps)
 
         # Early Stopping
-        early_stopping = keras.callbacks.EarlyStopping(monitor='val_acc', patience=5, restore_best_weights=True)
+        early_stopping = keras.callbacks.EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
         
         # Training
         history = hypermodel.fit(X_train, Y_train, epochs=model_settings['epochs'], validation_split=self.val_frac, callbacks =[early_stopping]) # We employ early stopping
@@ -1176,9 +1242,9 @@ class AnalyzeQG(common_base.CommonBase):
         model.add(keras.layers.Flatten(input_shape=input_shape))
 
         # Tune size of first dense layer
-        hp_units1 = hp.Int('units1', min_value=128, max_value=512, step=64)
-        hp_units2 = hp.Int('units2', min_value=128, max_value=512, step=64)
-        hp_units3 = hp.Int('units3', min_value=128, max_value=512, step=64)
+        hp_units1 = hp.Int('units1', min_value=300, max_value=300, step=64)
+        hp_units2 = hp.Int('units2', min_value=300, max_value=300, step=64)
+        hp_units3 = hp.Int('units3', min_value=300, max_value=512, step=64)
         model.add(keras.layers.Dense(units=hp_units1, activation='relu'))
         model.add(keras.layers.Dense(units=hp_units2, activation='relu'))
         model.add(keras.layers.Dense(units=hp_units3, activation='relu'))
@@ -1333,12 +1399,13 @@ class AnalyzeQG(common_base.CommonBase):
         start_time = time.time()
     
         x_subjet_input_sub_pfn = []
-        for n in range(N):
+        N_temp = N  # change this if you want to load N_temp < N_cluster particles
+        for n in range(N_temp):
             x_subjet_input_sub_pfn.append(np.array(self.subjet_input_total[f'subjet_r{r}_N{N}_z'][:,n]))
             x_subjet_input_sub_pfn.append(np.array(self.subjet_input_total[f'subjet_r{r}_N{N}_sub_rap'][:,n]))
             x_subjet_input_sub_pfn.append(np.array(self.subjet_input_total[f'subjet_r{r}_N{N}_sub_phi'][:,n]))
         x_subjet_input_sub_pfn = np.array(x_subjet_input_sub_pfn).T
-        x_subjet_input_sub_pfn = x_subjet_input_sub_pfn.reshape(self.n_total, N, 3)  # To bring it to the form (n_total, n_particles, dof of each particle)
+        x_subjet_input_sub_pfn = x_subjet_input_sub_pfn.reshape(self.n_total, N_temp, 3)  # To bring it to the form (n_total, n_particles, dof of each particle)
 
         # Preprocess by centering jets and normalizing pts
         for x_PFN in x_subjet_input_sub_pfn:
@@ -1349,11 +1416,6 @@ class AnalyzeQG(common_base.CommonBase):
 
         self.y_total_sub_pfn = energyflow.utils.to_categorical(self.y_total, num_classes=2)
 
-        
-
-        # Split data into train, val and test sets
-        (X_PFN_train, X_PFN_val, X_PFN_test, Y_PFN_train, Y_PFN_val, Y_PFN_test) = energyflow.utils.data_split(x_subjet_input_sub_pfn, self.y_total_sub_pfn,
-                                                                                             val=self.n_val, test=self.n_test)
         
         # Herwig Dataset
         if self.Herwig_dataset == 'True':
@@ -1380,48 +1442,64 @@ class AnalyzeQG(common_base.CommonBase):
             # Split data into train, val and test sets
             (X_PFN_herwig_train, X_PFN_herwig_val, X_PFN_herwig_test, Y_PFN_herwig_train, Y_PFN_herwig_val, Y_PFN_herwig_test) = energyflow.utils.data_split(x_subjet_herwig_input_sub_pfn, 
                                                                                             self.y_total_herwig_sub_pfn, val=self.n_val, test=self.n_test)
-                
-        # Build architecture
-        pfn = energyflow.archs.PFN(input_dim=x_subjet_input_sub_pfn.shape[-1],
+
+
+        auc_scores = []
+        for i in range(4):
+
+            # Split data into train, val and test sets
+            (X_PFN_train, X_PFN_val, X_PFN_test, Y_PFN_train, Y_PFN_val, Y_PFN_test) = energyflow.utils.data_split(x_subjet_input_sub_pfn, self.y_total_sub_pfn,
+                                                                                             val=int(self.n_val*self.n_total/self.n_total), test=int(self.n_test*self.n_total/self.n_total))
+            # Build architecture
+            opt = keras.optimizers.Adam(learning_rate=0.0003) # if error, change name to learning_rate
+        
+            pfn = energyflow.archs.PFN(input_dim=x_subjet_input_sub_pfn.shape[-1],
                                    Phi_sizes=model_settings['Phi_sizes'],
-                                   F_sizes=model_settings['F_sizes'])
+                                   F_sizes=model_settings['F_sizes'],
+                                   optimizer=opt)
 
 
-        # Early Stopping
-        early_stopping = keras.callbacks.EarlyStopping(monitor='val_acc', patience=5, restore_best_weights=True)
+            # Early Stopping
+            early_stopping = keras.callbacks.EarlyStopping(monitor='val_acc', patience=10, restore_best_weights=True)
 
+            if self.Herwig_dataset == 'False':
+                # Train model
+                history = pfn.fit(X_PFN_train,
+                                Y_PFN_train,
+                                epochs=model_settings['epochs'],
+                                batch_size=model_settings['batch_size'],
+                                validation_data=(X_PFN_val, Y_PFN_val),
+                                verbose=1, callbacks =[early_stopping])
 
-        if self.Herwig_dataset == 'False':
-            # Train model
-            history = pfn.fit(X_PFN_train,
-                            Y_PFN_train,
-                            epochs=model_settings['epochs'],
-                            batch_size=model_settings['batch_size'],
-                            validation_data=(X_PFN_val, Y_PFN_val),
-                            verbose=1, callbacks =[early_stopping])
+                history_epochs = len(history.history['loss']) # For the x axis of the plot    
+                self.epochs[f'{model}, r = {r}, N = {N}'] = history_epochs
 
-            history_epochs = len(history.history['loss']) # For the x axis of the plot    
-            self.epochs[f'{model}, r = {r}, N = {N}'] = history_epochs
+                # Plot metrics are a function of epochs
+                self.plot_NN_epochs(history_epochs, history, model)
+            
+                # Get predictions on test data
+                preds_PFN = pfn.predict(X_PFN_test, batch_size=1000)
 
-            # Plot metrics are a function of epochs
-            self.plot_NN_epochs(history_epochs, history, model)
+                # Get AUC and ROC curve + make plot
+                auc_PFN = sklearn.metrics.roc_auc_score(Y_PFN_test[:,1], preds_PFN[:,1])
+                print('Particle Flow Networks/Deep Sets: AUC = {} (test set)'.format(round(auc_PFN,4)))
+                self.AUC[f'{model}'].append(auc_PFN)
+                auc_scores.append(auc_PFN)
+                if self.subjet_basis=='exclusive':
+                    dim = N
+                elif self.subjet_basis=='inclusive':
+                    dim = r 
+
+                self.roc_curve_dict[model][dim] = sklearn.metrics.roc_curve(Y_PFN_test[:,1], preds_PFN[:,1])
+
+        self.AUC_av[f'{model}'].append(round(np.mean(auc_scores),4))
+        self.AUC_std[f'{model}'].append(round(statistics.stdev(auc_scores),4))
+        print()
+        print(f'For r={r}, N={N}, AUC = {auc_scores}')
+        print(f'For r={r}, N={N}, AUC = {np.mean(auc_scores)}, Error = {statistics.stdev(auc_scores)}')
+        print()
         
-            # Get predictions on test data
-            preds_PFN = pfn.predict(X_PFN_test, batch_size=1000)
-
-            # Get AUC and ROC curve + make plot
-            auc_PFN = sklearn.metrics.roc_auc_score(Y_PFN_test[:,1], preds_PFN[:,1])
-            print('Particle Flow Networks/Deep Sets: AUC = {} (test set)'.format(auc_PFN))
-            self.AUC[f'{model}'].append(auc_PFN)
-        
-            if self.subjet_basis=='exclusive':
-                dim = N
-            elif self.subjet_basis=='inclusive':
-                dim = r 
-
-            self.roc_curve_dict[model][dim] = sklearn.metrics.roc_curve(Y_PFN_test[:,1], preds_PFN[:,1])
-        
-        elif self.Herwig_dataset == 'True':
+        if self.Herwig_dataset == 'True':
             # Train model
             history = pfn.fit(X_PFN_train,
                             Y_PFN_train,
@@ -1658,6 +1736,107 @@ class AnalyzeQG(common_base.CommonBase):
             sys.exit(f'ERROR: Wrong Herwig Dataset choice')
         
 
+    #---------------------------------------------------------------
+    # Fit EFN for subjets
+    #---------------------------------------------------------------
+    def fit_sub_efn(self, model, model_settings, r, N):
+        print()
+        print('fit_sub_efn...')
+        start_time = time.time()
+        print('YES')
+        x_subjet_input_sub_efn = []
+        for n in range(N):
+            x_subjet_input_sub_efn.append(np.array(self.subjet_input_total[f'subjet_r{r}_N{N}_z'][:,n]))
+            x_subjet_input_sub_efn.append(np.array(self.subjet_input_total[f'subjet_r{r}_N{N}_sub_rap'][:,n]))
+            x_subjet_input_sub_efn.append(np.array(self.subjet_input_total[f'subjet_r{r}_N{N}_sub_phi'][:,n]))
+        x_subjet_input_sub_efn = np.array(x_subjet_input_sub_efn).T
+        x_subjet_input_sub_efn = x_subjet_input_sub_efn.reshape(self.n_total, N, 3)  # To bring it to the form (n_total, n_particles, dof of each particle)
+
+        self.y_total_sub_efn = energyflow.utils.to_categorical(self.y_total, num_classes=2)
+        
+        for x_EFN in x_subjet_input_sub_efn:
+            mask = x_EFN[:,0] > 0
+            
+            # Compute y,phi averages
+            yphi_avg = np.average(x_EFN[mask,1:3], weights=x_EFN[mask,0], axis=0)
+
+            # Adjust phi range: Initially it is [0,2Pi], now allow for negative values and >2Pi 
+            # so there are no gaps for a given jet.
+            # Mask particles that are far away from the average phi & cross the 2Pi<->0 boundary
+            mask_phi_1 = ((x_EFN[:,2] - yphi_avg[1] >  np.pi) & (x_EFN[:,2] != 0.))
+            mask_phi_2 = ((x_EFN[:,2] - yphi_avg[1] < -np.pi) & (x_EFN[:,2] != 0.))
+            
+            x_EFN[mask_phi_1,2] -= 2*np.pi
+            x_EFN[mask_phi_2,2] += 2*np.pi            
+            
+            # Now recompute y,phi averages after adjusting the phi range
+            yphi_avg1 = np.average(x_EFN[mask,1:3], weights=x_EFN[mask,0], axis=0)            
+            
+            # And center jets in the y,phi plane
+            x_EFN[mask,1:3] -= yphi_avg1
+
+            # Normalize transverse momenta p_Ti -> z_i
+            x_EFN[mask,0] /= x_EFN[:,0].sum()
+            
+            # Set particle four-vectors to zero if the z value is below a certain threshold.
+            mask2 = x_EFN[:,0]<0.00001
+            x_EFN[mask2,:]=0
+        
+        # Do not use PID for EFNs
+        x_subjet_input_sub_efn = x_subjet_input_sub_efn[:,:,:3]
+        
+        # Make 800 four-vector array smaller, e.g. only 150. Ok w/o background
+        x_subjet_input_sub_efn = x_subjet_input_sub_efn[:,:150]
+        
+        # Check shape
+        if self.y_total_sub_efn.shape[0] != x_subjet_input_sub_efn.shape[0]:
+            print(f'Number of labels {self.y_total_sub_efn.shape} does not match number of jets {x_subjet_input_sub_efn.shape} ! ')
+            
+        # Split data into train, val and test sets 
+        # and separate momentum fraction z and angles (y,phi)
+        (z_EFN_train, z_EFN_val, z_EFN_test, 
+         p_EFN_train, p_EFN_val, p_EFN_test,
+         Y_EFN_train, Y_EFN_val, Y_EFN_test) = energyflow.utils.data_split(x_subjet_input_sub_efn[:,:,0], x_subjet_input_sub_efn[:,:,1:], self.y_total_sub_efn, 
+                                                                           val=self.n_val, test=self.n_test)
+        
+
+        # Build architecture
+        opt = keras.optimizers.Adam(learning_rate=model_settings['learning_rate']) # if error, change name to learning_rate
+        efn = energyflow.archs.EFN(input_dim=2,
+                                   Phi_sizes=model_settings['Phi_sizes'],
+                                   F_sizes=model_settings['F_sizes'],
+                                   optimizer=opt)
+        
+        # Early Stopping
+        early_stopping = keras.callbacks.EarlyStopping(monitor='val_acc', patience=5, restore_best_weights=True)
+
+
+        if self.Herwig_dataset == 'False':
+            # Train model
+            history = efn.fit([z_EFN_train,p_EFN_train],
+                            Y_EFN_train,
+                            epochs=model_settings['epochs'],
+                            batch_size=model_settings['batch_size'],
+                            validation_data=([z_EFN_val,p_EFN_val], Y_EFN_val),
+                            verbose=1, callbacks =[early_stopping])
+
+            history_epochs = len(history.history['loss']) # For the x axis of the plot
+            self.epochs[f'{model}'] = history_epochs
+
+            # Plot metrics are a function of epochs
+            self.plot_NN_epochs(history_epochs, history, model)
+        
+            # Get predictions on test data
+            preds_EFN = efn.predict([z_EFN_test,p_EFN_test], batch_size=1000)     
+
+            # Get AUC and ROC curve + make plot
+            auc_EFN = sklearn.metrics.roc_auc_score(Y_EFN_test[:,1], preds_EFN[:,1])
+            print('(IRC safe) Energy Flow Networks: AUC = {} (test set)'.format(auc_EFN))
+            self.AUC[f'{model}'].append(auc_EFN)
+        
+            self.roc_curve_dict[model] = sklearn.metrics.roc_curve(Y_EFN_test[:,1], preds_EFN[:,1])
+
+
     #--------------------------------------------------------------- 
     # My own remap PID routine (similar to remap_pids from energyflow)
     #---------------------------------------------------------------         
@@ -1790,7 +1969,7 @@ class AnalyzeQG(common_base.CommonBase):
             else:
                 ylabel = ''
                 xlabel = rf'{qa_observable}'
-                bins = np.linspace(0, np.amax(result_g), 20)
+                bins = np.linspace(0, np.amax(result_g), 60)
             plt.xlabel(xlabel, fontsize=14)
             plt.ylabel(ylabel, fontsize=16)
 
