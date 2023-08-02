@@ -9,12 +9,12 @@ dataset_type: 'qg'
 # Some parameters of the q-g dataset
 
 R: 0.4
-pt: [1000., 1050.]  # The choices are [300, 350], [500, 550], [1000, 1050]
-                    # For [500., 550.] we can load either Jesse's or Mateusz's. Check the processing script to see which one. (Maybe add a switch ?)
+pt: [500., 550.]  # The choices are [300, 350], [500, 550], [1000, 1050]
+                  # For [500., 550.] we can load either Jesse's or Mateusz's. Check the processing script to see which one. (Maybe add a switch ?)
 y_max: 1.701
 
 # Size of q-g labeled data to load
-n_total: 10000
+n_total: 50000
 
 # Load laman
 laman: 'True'
@@ -39,20 +39,20 @@ Clustering_Alg: 'antikt_algorithm'
 Laman_construction : 'naive' 
 
 # Run fully connected graph
-fully_con_subjets : 'True'
-fully_con_hadrons : 'True'
+fully_con_subjets : True
+fully_con_hadrons : True
 
 # Load Herwig Dataset for testing. Boolean variable
-Herwig_dataset : 'False'
+Herwig_dataset : False
 
 #------------------------------------------------------------------
 # These parameters are used only in ML analysis
 #------------------------------------------------------------------
 
 # Size of q-g labeled data to load
-n_train: 3000
-n_val:   1000
-n_test:  1000
+n_train: 40000
+n_val:   5000
+n_test:  5000
 
 # Classification labels
 q_label: 'quark'                                    # label 1
@@ -62,8 +62,8 @@ g_label: 'gluon'                                    # label 0
 # The K-body phase space is (3K-4)-dimensional
 K: [2,4]
 
-# Select model: pfn, sub_pfn, efn, sub_efn, particle_gnn, sub_dnn, laman_dnn, nsub_dnn, nsub_linear
-models: [particle_gnn]
+# Select model: pfn, sub_pfn, efn, sub_efn, particle_gnn, sub_dnn, laman_dnn, nsub_dnn, nsub_linear, particle_net
+models: [pfn]
 
 pfn:
 

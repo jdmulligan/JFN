@@ -47,6 +47,9 @@ from matplotlib import pyplot as plt
 import seaborn as sns
 sns.set_context('paper', rc={'font.size':18,'axes.titlesize':18,'axes.labelsize':18})
 
+# Particle Net Model 
+import ParticleNet
+
 # Base class
 sys.path.append('.')
 from base import common_base
@@ -54,11 +57,11 @@ from base import common_base
 ##################################################################
     
 class GCN_class(torch.nn.Module):
-    def __init__(self,graph_batch, hidden_channels):
+    def __init__(self, graph_batch, hidden_channels):
         super(GCN_class,self).__init__()
         self.conv1 = GCNConv(graph_batch.num_features, hidden_channels)
         self.conv2 = GCNConv(hidden_channels, hidden_channels)
-        self.lin = Linear(hidden_channels,2)
+        self.lin = Linear(hidden_channels, 2)
 
     def forward(self, x, edge_index, batch):
 
@@ -77,26 +80,51 @@ class GCN_class(torch.nn.Module):
 ##################################################################
     
 class GAT_class(torch.nn.Module):
-    def __init__(self, graph_batch, hidden_channels, heads, edge_dimension, edge_attributes):
+    def __init__(self, graph_batch, hidden_channels, heads = 2, edge_dimension = 1):
         super(GAT_class,self).__init__()
-        self.conv1 = GATConv(graph_batch.num_features, hidden_channels, heads, edge_dim = edge_dimension)
-        self.conv2 = GATConv(hidden_channels*heads, hidden_channels, heads, edge_dim = edge_dimension)
+        self.conv1 = GATConv(graph_batch.num_features, hidden_channels, heads)
+        self.lin1 = Linear(hidden_channels*heads, hidden_channels*4)
+        self.lin2 = Linear(hidden_channels*4, hidden_channels*8)
+        self.conv2 = GATConv(hidden_channels*8, hidden_channels*2, heads)
+        self.lin3 = Linear(hidden_channels*2*heads, hidden_channels*4) 
+        self.lin4 = Linear(hidden_channels*4, hidden_channels*8)
+        self.conv3 = GATConv(hidden_channels*8, hidden_channels*4, heads)
         #self.conv3 = GATConv(hidden_channels*heads, hidden_channels, heads, edge_dim = edge_dimension)
-        self.lin = Linear(hidden_channels*heads, 2)
+        self.lin_final1 = Linear(hidden_channels*4*heads, hidden_channels*4)
+        self.lin_final2 = Linear(hidden_channels*4, hidden_channels*4)
+        self.lin_final3 = Linear(hidden_channels*4, hidden_channels*2)
+        self.lin_final4 = Linear(hidden_channels*2, 2)
+        
+    def forward(self, x, edge_index, batch):
 
-    def forward(self, x, edge_index, batch, edge_attributes):
-
-        #x = F.dropout(x, p=0.4, training = self.training)
-        x = self.conv1(x, edge_index, edge_attr = edge_attributes )
+        x = F.dropout(x, p=0.1, training = self.training)
+        x = self.conv1(x, edge_index)
         x = x.relu()
-        x = self.conv2(x, edge_index, edge_attr = edge_attributes )
+        x = self.lin1(x)
+        x = x.relu()
+        x = self.lin2(x)
+        x = x.relu()
+        x = self.conv2(x, edge_index)
+        x = x.relu()
+        x = self.lin3(x)
+        x = x.relu()
+        x = self.lin4(x)
+        x = x.relu()
         #x = x.relu()
-        #x = self.conv3(x,edge_index,edge_attr = edge_attributes )
+        x = self.conv3(x,edge_index)
 
         x = global_mean_pool(x, batch)
 
         #x = F.dropout(x, p=0.4, training = self.training)
-        x = self.lin(x)
+        x = self.lin_final1(x)
+        x = x.relu()
+        x = self.lin_final2(x)
+        x = x.relu()
+        x = self.lin_final3(x)
+        x = x.relu()
+        x = self.lin_final4(x)
+        # Do I need to do a softmax here? 
+        
 
         return x 
 
@@ -211,7 +239,7 @@ class AnalyzeQG(common_base.CommonBase):
         self.Laman_construction = config['Laman_construction']
 
         # Fully connected gnn on hadrons
-        self.fully_con_subjets = config['fully_con_subjets']
+        self.fully_con_hadrons = config['fully_con_hadrons']
 
         # Load Herwig Dataset: Boolean variable
         self.Herwig_dataset = config['Herwig_dataset']
@@ -277,6 +305,10 @@ class AnalyzeQG(common_base.CommonBase):
                 self.model_settings[model]['learning_rate'] = config[model]['learning_rate']
 
             if 'gnn' in model:
+                self.model_settings[model]['epochs'] = config[model]['epochs']
+                self.model_settings[model]['batch_size'] = config[model]['batch_size']
+            
+            if model == "particle_net" :
                 self.model_settings[model]['epochs'] = config[model]['epochs']
                 self.model_settings[model]['batch_size'] = config[model]['batch_size']
 
@@ -540,6 +572,9 @@ class AnalyzeQG(common_base.CommonBase):
                 if model == 'efn':
                     self.fit_efn(model, model_settings)
 
+            # Particle Net 
+            if model == 'particle_net':
+                self.fit_particle_net(model, model_settings)
             # GNN
             if model == 'particle_gnn':
                self.fit_particle_gnn(model, model_settings)
@@ -573,11 +608,12 @@ class AnalyzeQG(common_base.CommonBase):
     # Fit Graph Neural Network with particle four-vectors
     #---------------------------------------------------------------
     def fit_particle_gnn(self, model, model_settings):
-        print()
         print('fit_particle_gnn...')
+        print()
         start_time = time.time()
 
         # load data
+        #self.n_total = 50000 # Need to change this
         X, y = energyflow.qg_jets.load(self.n_total)
 
         # ignore pid information for now
@@ -609,19 +645,17 @@ class AnalyzeQG(common_base.CommonBase):
         for r in self.r_list:
                 for N in self.N_cluster_list:
                     graph_list[f'subjet_r{r}_N{N}'] = []
-        print()
-        print(X)
-        print()
-        print(X[3999])
-        print()
-        print(len(X))
+        
+        
         # Loop over all jets
         for i, xp in enumerate(X):
             
-            if self.fully_con_subjets :
+            if self.fully_con_hadrons :
                 # 1. Get node feature vector 
                 #    First need to remove zero padding
                 xp = xp[~np.all(xp == 0, axis=1)]
+                # print info on xp 
+                
                 node_features = torch.tensor(xp,dtype=torch.float)
 
                 # 2. Get adjacency matrix / edge indices
@@ -652,13 +686,14 @@ class AnalyzeQG(common_base.CommonBase):
 
             # Laman Graph
             for r in self.r_list:
+                break # TO DO: Remove this break
                 for N in self.N_cluster_list:
                     coo_laman[f'subjet_r{r}_N{N}'] = self.subjet_input_total[f'subjet_r{r}_N{N}_edges'][i,:,:]
                     row, col = np.where(coo_laman[f'subjet_r{r}_N{N}'] ==-1)
                     
                     # Number of subjets 
                     if len(row)!=0:
-                        n = np.int((row[0] + 3)/2)
+                        n = int((row[0] + 3)/2)
                     else:  
                         n=N
                     
@@ -685,12 +720,17 @@ class AnalyzeQG(common_base.CommonBase):
 
 
                     graph_list[f'subjet_r{r}_N{N}'].append(graph)
-               
-        if self.fully_con_subjets:
+        # end of loop over jets 
+        # Now we have a list of graphs for each subjet radius and number of subjets for both the fully connected and the Laman graphs
+        # Run the fully connected graphs through the GNN classifier
+        
+        if self.fully_con_hadrons:
             # 7. Create PyG batch object that contains all the graphs and labels
             graph_batch = torch_geometric.data.Batch().from_data_list(graph_list_fullycon)
 
             # Print
+            print()
+            print(f"Training the fully connected graphs (hadrons)...")
             print(f'Number of graphs in PyG batch object: {graph_batch.num_graphs}')
             print(f'Graph batch structure: {graph_batch}') # It says "DataDataBatch" .. correct?
 
@@ -713,19 +753,21 @@ class AnalyzeQG(common_base.CommonBase):
             # Check a few things .. 
             # 1. Graph batch
             print(f'Number of graphs: {graph_batch.num_graphs}') # correct number ...??
-            print(f'Number of features: {graph_batch.num_features}') # ok
+            #print(f'Number of features: {graph_batch.num_features}') # ok
             print(f'Number of node features: {graph_batch.num_node_features}') # ok
             #print(f'Number of classes: {graph_batch.num_classes}') # .. labels?? print(graph_batch.y)
 
             # 2. A particular graph
+            print(f"For a particular graph: ")
             print(f'Number of nodes: {graph_batch[1].num_nodes}') # ok
-            print(f'Number of edges: {graph_batch[1].num_edges}') # ok, 17*16=272
+            print(f'Number of edges: {graph_batch[1].num_edges}') # ok, this jet has 17 hadrons in it -> # edges = 17*16=272
             print(f'Has self-loops: {graph_batch[1].has_self_loops()}') # ok
             print(f'Is undirected: {graph_batch[1].is_undirected()}') # ok
 
             # Shuffle and split into training and test set
             #graph_batch = graph_batch.shuffle() # seems like I have the wrong format ...
 
+            #self.n_train = 40000 # TO DO: erase
             train_dataset = graph_batch[:self.n_train] # ok ...
             test_dataset = graph_batch[self.n_train:]
 
@@ -741,13 +783,60 @@ class AnalyzeQG(common_base.CommonBase):
             # 2. Aggregate node embeddings into a unified graph embedding (readout layer)
             # 3. Train a final classifier on the graph embedding
             
-            gnn_model = GCN_class(graph_batch, hidden_channels = 64)  # TO DO: In order to train this model with the Laman w/ edge_attr we need to add a new train_gnn -> 
-            print(gnn_model)
+            #gnn_model = GCN_class(graph_batch, hidden_channels = 64)  # TO DO: In order to train this model with the Laman w/ edge_attr we need to add a new train_gnn -> 
+            gnn_model = GAT_class(graph_batch, hidden_channels = 64)
+            
             gnn_model = gnn_model.to(self.torch_device)
-            #print(f'gnn_model is_cuda: {gnn_model.is_cuda}')
+            
+            print(f"Running the fully connected GNN classifier on hadrons ...")
+            print(f"torch.cuda.is_available = {torch.cuda.is_available()}")
+            print(f"gnn_model: {gnn_model}")
+            print(f'gnn_model is_cuda: {next(gnn_model.parameters()).is_cuda}')
+            
+            # test the feature space 
+            #batch_size = 1
+            #num_nodes = 4
+            #in_features = 3
+            
+            #x = torch.randn(batch_size, num_nodes, in_features)  # Example feature matrix with `batch_size` samples
+            
+            # Fully connected graph 
+            #adj_matrix = np.ones((num_nodes, num_nodes)) - np.identity((num_nodes))
+            #row, col = np.where(adj_matrix)
+
+            #    Switch format
+            #edge_index = torch.tensor([row,col],dtype=torch.long)
+
+            # Move the model and input data to CUDA if available
+            #if torch.cuda.is_available():
+             #   gnn_model = gnn_model.to('cuda')
+              #  x = x.to('cuda')
+               # edge_index = edge_index.to('cuda')
+
+            # Forward pass to compute feature vectors at each layer
+            #layer_outputs = []
+            #x_original = x.clone()  # Keep a copy of the original input features
+
+            # Store the output of each layer (including the input features as the first layer)
+            #layer_outputs.append(x_original)
+            #index = 0 
+            #for layer in gnn_model.children():
+             #   if index == 2:
+              #      continue
+               # print(f"layer: {layer}")
+                #x = layer(x, edge_index)
+                #layer_outputs.append(x.clone())
+                #index += 1
+
+            #for i, output in enumerate(layer_outputs):
+             #   if i == 2:
+              #      continue
+               # print(f"Layer {i}:")
+                #print(output)
+                #print("---------")
 
             # Now train the fully connected GNN
-            optimizer = torch.optim.Adam(gnn_model.parameters(), lr=0.001)
+            optimizer = torch.optim.Adam(gnn_model.parameters(), lr=0.0001)
             criterion = torch.nn.CrossEntropyLoss()
 
             for epoch in range(1, model_settings['epochs']): # -> 171
@@ -758,8 +847,8 @@ class AnalyzeQG(common_base.CommonBase):
 
             # Get AUC & ROC curve for the fully connected GNN
             for i, datatest in enumerate(test_loader):  # Iterate in batches over the test dataset.
-                pred_graph = gnn_model(datatest.x, datatest.edge_index, datatest.batch).data # '.data' removes the 'grad..' from the torch tensor
-                pred_graph = pred_graph.cpu().data.numpy() # Convert predictions to np.array. Not: values not in [0,1]
+                pred_graph  = gnn_model(datatest.x, datatest.edge_index, datatest.batch).data # '.data' removes the 'grad..' from the torch tensor
+                pred_graph  = pred_graph.cpu().data.numpy() # Convert predictions to np.array. Not: values not in [0,1]
                 label_graph = datatest.y.cpu().data.numpy() # Get labels
 
                 if i==0:
@@ -776,118 +865,122 @@ class AnalyzeQG(common_base.CommonBase):
             # get ROC curve for the fully connected GNN
             self.roc_curve_dict[model] = sklearn.metrics.roc_curve(label_graphs, pred_graphs[:,1])
 
+        # Run the GNN for the Laman graphs
         for r in self.r_list:
-                for N in self.N_cluster_list:
+            break # TO DO: Remove this break
+            for N in self.N_cluster_list:
                     
-                    graph_batch[f'subjet_r{r}_N{N}'] = torch_geometric.data.Batch().from_data_list(graph_list[f'subjet_r{r}_N{N}'])
-                    graph_batch = graph_batch[f'subjet_r{r}_N{N}']
-                    print(f'graph_batch: {graph_batch.is_cuda}')
+                graph_batch[f'subjet_r{r}_N{N}'] = torch_geometric.data.Batch().from_data_list(graph_list[f'subjet_r{r}_N{N}'])
+                graph_batch = graph_batch[f'subjet_r{r}_N{N}']
+                print(f'graph_batch: {graph_batch.is_cuda}')
 
-                    # Print
-                    print(f'Number of graphs in PyG batch object: {graph_batch.num_graphs}')
-                    print(f'Graph batch structure: {graph_batch}') # It says "DataDataBatch" .. correct?
-
+                # Print
+                print(f'Number of graphs in PyG batch object: {graph_batch.num_graphs}')
+                print(f'Graph batch structure: {graph_batch}') # It says "DataDataBatch" .. correct?
            
-                    # Visualize one of the jet graphs as an example ...
+                # Visualize one of the jet graphs as an example ...
 
-                    vis = torch_geometric.utils.convert.to_networkx(graph_batch[3],to_undirected=True) #... undirected graph?
-                    plt.figure(1,figsize=(10,10))
-                    networkx.draw(vis,cmap=plt.get_cmap('Set2'),node_size=10,linewidths=6)
-                    plt.savefig(os.path.join(self.output_dir, 'jet_graph.pdf'))
-                    plt.close()
+                vis = torch_geometric.utils.convert.to_networkx(graph_batch[3],to_undirected=True) #... undirected graph?
+                plt.figure(1,figsize=(10,10))
+                networkx.draw(vis,cmap=plt.get_cmap('Set2'),node_size=10,linewidths=6)
+                plt.savefig(os.path.join(self.output_dir, 'jet_graph.pdf'))
+                plt.close()
 
-                    # Check adjacency of the first jet
-                    print()
-                    print(f'adjacency of first jet: {graph_batch[0].edge_index}')
-                    print()
+                # Check adjacency of the first jet
+                print()
+                print(f'adjacency of first jet: {graph_batch[0].edge_index}')
+                print()
 
-                    # Check a few things .. 
-                    # 1. Graph batch
-                    print(f'Number of graphs: {graph_batch.num_graphs}') # ok
-                    print(f'Number of features: {graph_batch.num_features}') # ok
-                    print(f'Number of node features: {graph_batch.num_node_features}') # ok
-                    print(f'Number of edge features: {graph_batch.num_edge_features}') # ok
+                # Check a few things .. 
+                # 1. Graph batch
+                print(f'Number of graphs: {graph_batch.num_graphs}') # ok
+                print(f'Number of features: {graph_batch.num_features}') # ok
+                print(f'Number of node features: {graph_batch.num_node_features}') # ok
+                print(f'Number of edge features: {graph_batch.num_edge_features}') # ok
 
-                    #print(f'Number of classes: {graph_batch.num_classes}') # .. labels?? print(graph_batch.y)
+                #print(f'Number of classes: {graph_batch.num_classes}') # .. labels?? print(graph_batch.y)
 
-                    # Shuffle and split into training and test set
-                    #graph_batch = graph_batch.shuffle() # seems like I have the wrong format ...
+                # Shuffle and split into training and test set
+                #graph_batch = graph_batch.shuffle() # seems like I have the wrong format ...
 
-                    train_dataset = graph_batch[:self.n_train] # ok ...
-                    test_dataset = graph_batch[self.n_train:]
+                train_dataset = graph_batch[:self.n_train] # ok ...
+                test_dataset = graph_batch[self.n_train:]
 
-                    print(f'Number of training graphs: {len(train_dataset)}') # now ok, doesn't work for graph_batch ...?
-                    print(f'Number of test graphs: {len(test_dataset)}')
+                print(f'Number of training graphs: {len(train_dataset)}') # now ok, doesn't work for graph_batch ...?
+                print(f'Number of test graphs: {len(test_dataset)}')
 
-                    # Group graphs into mini-batches for parallelization (..?)
-                    train_loader = torch_geometric.loader.DataLoader(train_dataset, batch_size=model_settings['batch_size'], shuffle=True)
-                    test_loader = torch_geometric.loader.DataLoader(test_dataset, batch_size=model_settings['batch_size'], shuffle=False)
+                # Group graphs into mini-batches for parallelization (..?)
+                train_loader = torch_geometric.loader.DataLoader(train_dataset, batch_size=model_settings['batch_size'], shuffle=True)
+                test_loader = torch_geometric.loader.DataLoader(test_dataset, batch_size=model_settings['batch_size'], shuffle=False)
 
        
-                    # Set up GNN structure
-                    # 1. Embed each node by performing multiple rounds of message passing
-                    # 2. Aggregate node embeddings into a unified graph embedding (readout layer)
-                    # 3. Train a final classifier on the graph embedding
-                    gnn_model = GAT_class(graph_batch, hidden_channels = 8, heads = 8, edge_dimension = 1, edge_attributes = graph_batch.edge_attr)
-                    print(gnn_model)
-                    gnn_model = gnn_model.to(self.torch_device)
-                    #print(f'gnn_model is_cuda: {gnn_model.is_cuda}')
-
-                    # Now train the GNN
-                    optimizer = torch.optim.Adam(gnn_model.parameters(), lr=0.01)
-                    criterion = torch.nn.CrossEntropyLoss()
-
-                    self.best_valid_acc = 0
-                    last_epochs = 0
-                    self.patience_gnn = 4
-                    for epoch in range(1, model_settings['epochs'] + 1): # -> 171
-                        time_start = time.time()
-                        loss_train = self.train_gnn(train_loader, gnn_model, optimizer, criterion, True)
-                        train_acc = self.test_gnn(train_loader, gnn_model, True)
-                        test_acc = self.test_gnn(test_loader, gnn_model, True)
-                        time_end = time.time()
-                        print(f'Epoch: {epoch:02d}, Train Loss: {loss_train:.4f},  Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}, Duration: {time_end-time_start}')
-
-                        if test_acc > self.best_valid_acc:
-                            last_epochs = 0
-                            self.best_valid_acc = test_acc
-                            # Save the best model
-                            torch.save(gnn_model.state_dict(), 'best-model-parameters.pt')
-
-                        if last_epochs >= self.patience_gnn:
-                            print(f"Ending training after {epoch} epochs due to performance saturation with a patience parameter of {self.patience_gnn} epochs")
-                            break
-
-                        last_epochs += 1
+                # Set up GNN structure
+                # 1. Embed each node by performing multiple rounds of message passing
+                # 2. Aggregate node embeddings into a unified graph embedding (readout layer)
+                # 3. Train a final classifier on the graph embedding
+                gnn_model = GAT_class(graph_batch, hidden_channels = 8, heads = 8, edge_dimension = 1, edge_attributes = graph_batch.edge_attr)
                     
-                    # Use the best model
-                    gnn_model.load_state_dict(torch.load('best-model-parameters.pt'))
+                gnn_model = gnn_model.to(self.torch_device)
+            
+                print(f"Running the Laman GNN for r={r} and N={N}")
+                print(f"gnn_model: {gnn_model}")
 
-                    # Get AUC & ROC curve
-                    for i, datatest in enumerate(test_loader):  # Iterate in batches over the test dataset.
-                        pred_graph = gnn_model(datatest.x, datatest.edge_index, datatest.batch, datatest.edge_attr).data # '.data' removes the 'grad..' from the torch tensor
-                        pred_graph = pred_graph.cpu().data.numpy() # Convert predictions to np.array. Not: values not in [0,1]
-                        label_graph = datatest.y.cpu().data.numpy() # Get labels
+                #print(f'gnn_model is_cuda: {gnn_model.is_cuda}')
 
-                        if i==0:
-                            pred_graphs = pred_graph
-                            label_graphs = label_graph
-                        else:
-                            pred_graphs = np.concatenate((pred_graphs,pred_graph),axis=0)
-                            label_graphs = np.concatenate((label_graphs,label_graph),axis=0)
+                # Now train the GNN
+                optimizer = torch.optim.Adam(gnn_model.parameters(), lr=0.01)
+                criterion = torch.nn.CrossEntropyLoss()
 
-                    # get AUC
-                    gnn_auc = sklearn.metrics.roc_auc_score(label_graphs, pred_graphs[:,1])
-                    print()
-                    print(f'Laman GNN with r={r}, N={N} : AUC based on particle four-vectors is: {gnn_auc}')
+                self.best_valid_acc = 0
+                last_epochs = 0
+                self.patience_gnn = 4
+                for epoch in range(1, model_settings['epochs'] + 1): # -> 171
+                    time_start = time.time()
+                    loss_train = self.train_gnn(train_loader, gnn_model, optimizer, criterion, True)
+                    auc_train, train_acc = self.test_gnn(train_loader, gnn_model, True)
+                    auc_test,  test_acc = self.test_gnn(test_loader, gnn_model, True)
+                    time_end = time.time()
+                    print(f'Epoch: {epoch:02d}, Train Loss: {loss_train:.4f},  Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}, AUC: {auc_test:4f}, Duration: {time_end-time_start}')
 
-                    self.AUC[f'{model}'].append(gnn_auc)
+                    if test_acc > self.best_valid_acc:
+                        last_epochs = 0
+                        self.best_valid_acc = test_acc
+                        # Save the best model
+                        torch.save(gnn_model.state_dict(), 'best-model-parameters.pt')
+
+                    if last_epochs >= self.patience_gnn:
+                        print(f"Ending training after {epoch} epochs due to performance saturation with a patience parameter of {self.patience_gnn} epochs")
+                        break
+                    last_epochs += 1
+                    
+                # Use the best model
+                gnn_model.load_state_dict(torch.load('best-model-parameters.pt'))
+
+                # Get AUC & ROC curve
+                for i, datatest in enumerate(test_loader):  # Iterate in batches over the test dataset.
+                    pred_graph = gnn_model(datatest.x, datatest.edge_index, datatest.batch, datatest.edge_attr).data # '.data' removes the 'grad..' from the torch tensor
+                    pred_graph = pred_graph.cpu().data.numpy() # Convert predictions to np.array. Not: values not in [0,1]
+                    label_graph = datatest.y.cpu().data.numpy() # Get labels
+
+                    if i==0:
+                        pred_graphs = pred_graph
+                        label_graphs = label_graph
+                    else:
+                        pred_graphs = np.concatenate((pred_graphs,pred_graph),axis=0)
+                        label_graphs = np.concatenate((label_graphs,label_graph),axis=0)
+
+                # get AUC
+                gnn_auc = sklearn.metrics.roc_auc_score(label_graphs, pred_graphs[:,1])
+                print()
+                print(f'Laman GNN with r={r}, N={N} : AUC based on particle four-vectors is: {gnn_auc}')
+
+                self.AUC[f'{model}'].append(gnn_auc)
 
         print(f'--- runtime: {time.time() - start_time} seconds ---')
         print()
 
     #---------------------------------------------------------------
-    def train_gnn(self, train_loader, gnn_model, optimizer, criterion, edge_attr_boolean):
+    def train_gnn(self, train_loader, gnn_model, optimizer, criterion, edge_attr_boolean = False):
         gnn_model.train()
 
         loss_cum=0
@@ -920,7 +1013,7 @@ class AnalyzeQG(common_base.CommonBase):
                 out = gnn_model(data.x, data.edge_index, data.batch)
             pred = out.argmax(dim=1)  # Use the class with highest probability.
             correct += int((pred == data.y).sum())  # Check against ground-truth labels.
-        return correct / len(loader.dataset)  # Derive ratio of correct predictions.
+        return (auc, correct / len(loader.dataset) ) # Derive ratio of correct predictions.
 
     #---------------------------------------------------------------
     # Fit linear model for Nsubjettiness
@@ -1263,6 +1356,151 @@ class AnalyzeQG(common_base.CommonBase):
         return model
 
     #---------------------------------------------------------------
+    # Fit ML model -- Particle Net 
+    #---------------------------------------------------------------
+    def fit_particle_net(self, model, model_settings):
+        print()
+        print('fit_particle_net...')
+
+        # Manually set the data size for now
+        # TODO: Move this to the model settings
+        n_total = 13000
+        n_val = 1000   
+        n_test = 1000
+
+        # Load the four-vectors directly from the quark vs gluon data set
+        X_PFN, Y_PFN = energyflow.datasets.qg_jets.load(num_data=n_total, pad=True, 
+                                                        generator='pythia',  # Herwig is also available
+                                                        with_bc=False        # Turn on to enable heavy quarks
+                                                       )                     # X_PFN.shape = (n_jets, n_particles per jet, n_variables)  
+               
+        print(f'(n_jets, n_particles per jet, n_variables): {X_PFN.shape}')
+
+        # Preprocess by centering jets and normalizing pts
+        for x_PFN in X_PFN:
+            mask = x_PFN[:,0] > 0
+            yphi_avg = np.average(x_PFN[mask,1:3], weights=x_PFN[mask,0], axis=0)
+            x_PFN[mask,1:3] -= yphi_avg
+            x_PFN[mask,0] /= x_PFN[:,0].sum()
+
+        X_PFN = X_PFN[:,:,:3]
+        
+        # Split data into train, val and test sets
+        (X_PFN_train, X_PFN_val, X_PFN_test, Y_PFN_train, Y_PFN_val, Y_PFN_test) = energyflow.utils.data_split(X_PFN, Y_PFN,
+                                                                                                               val=n_val, test=n_test)
+
+
+        particlenet_model = ParticleNet.ParticleNetTagger(pf_features_dims=3, sv_features_dims=0, num_classes = 2)
+        particlenet_model = particlenet_model.to(self.torch_device)
+        
+        print(f"torch.cuda.is_available = {torch.cuda.is_available()}")
+        print()
+        print(f"particle_net model: {particlenet_model}")
+        print()
+
+        # Now train particle net
+        learning_rate = 0.001
+        #optimizer = torch.optim.Adam(particlenet_model.parameters(), lr = learning_rate)
+        optimizer = torch.optim.SGD(particlenet_model.parameters(), lr = learning_rate, momentum = 0.9)
+        criterion = torch.nn.CrossEntropyLoss()
+
+        # For debugging in case of a gradient computation error
+        torch.autograd.set_detect_anomaly(True)
+
+        # Train the model with a batch size of 256
+        batch_size = 128
+          
+        for epoch in range(1, 30): # -> 171
+            print("--------------------------------")
+            indices = torch.randperm(len(X_PFN_train))
+            X_PFN_train_shuffled = X_PFN_train[indices]
+            Y_PFN_train_shuffled = Y_PFN_train[indices]
+
+            for batch_start in range(0, len(X_PFN_train), batch_size):
+                # Get the current batch
+                batch_end = min(batch_start + batch_size, len(X_PFN_train))
+                inputs_batch = X_PFN_train_shuffled[batch_start:batch_end]
+                labels_batch = Y_PFN_train_shuffled[batch_start:batch_end]
+                self.train_particlenet(inputs_batch, labels_batch, particlenet_model, optimizer, criterion)
+            
+            auc_train, train_acc = self.test_particlenet(X_PFN_train, Y_PFN_train, particlenet_model)
+            auc_test,  test_acc =  self.test_particlenet(X_PFN_test,  Y_PFN_test,  particlenet_model)
+            print(f'Epoch: {epoch:02d}, Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}, AUC: {auc_test:.4f}')
+            torch.cuda.empty_cache()
+
+        # For debugging. Ignore for now 
+
+        #for epoch in range(1, 150): # -> 171
+        #    print("particlenet_model.state_dict() = ", particlenet_model.state_dict())
+        #    model_weights_before_training = [param.data.clone() for param in particlenet_model.parameters()]
+        #    initial_state_dict = particlenet_model.state_dict()
+        #    self.train_particlenet(X_PFN_train, Y_PFN_train, particlenet_model, optimizer, criterion)
+            
+        #    print("--------------------------------")
+        #    model_weights_after_training = [param.data.clone() for param in particlenet_model.parameters()]
+        #    trained_state_dict = particlenet_model.state_dict()
+
+            #for name, param in initial_state_dict.items():
+            #    if torch.any(param != trained_state_dict[name]):
+            #        print(f"Parameter {name} changed after training.")
+            
+
+        #    train_acc = self.test_particlenet(X_PFN_train, Y_PFN_train, particlenet_model)
+        #    test_acc =  self.test_particlenet(X_PFN_test,  Y_PFN_test,  particlenet_model)
+        #    print(f'Epoch: {epoch:02d}, Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}')
+
+
+    #---------------------------------------------------------------
+    def train_particlenet(self, X_PFN, Y_PFN, particlenet_model, optimizer, criterion):
+        particlenet_model.train()
+
+        X_PFN = torch.tensor(X_PFN, dtype=torch.float32).to(self.torch_device)
+
+        points = X_PFN[:, :, 1:3]     # the eta-phi points of the particles to use as the points for the k-NN algorithm
+        loss_cum = 0
+
+        # The prediction is the output of the network
+        out = particlenet_model(pf_points = points, pf_features = X_PFN, pf_mask = torch.ones(X_PFN.shape), sv_points =  torch.zeros(points.shape), sv_features = torch.zeros(X_PFN.shape), sv_mask = torch.ones(X_PFN.shape)) 
+        
+        Y_PFN = energyflow.utils.to_categorical(Y_PFN, num_classes=2)           # Convert to one-hot encoding to calculate the loss
+        Y_PFN = torch.tensor(Y_PFN, dtype=torch.float32).to(self.torch_device)  # Convert to tensor and move to GPU
+        
+        loss = criterion(out, Y_PFN)  # Compute the loss.
+        loss_cum += loss.item()       # Cumulative loss
+        loss.backward()               # Derive gradients.
+        optimizer.step()              # Update parameters based on gradients.
+        optimizer.zero_grad()         # Clear gradients.
+
+        return loss_cum/len(X_PFN)
+
+    #---------------------------------------------------------------
+    def test_particlenet(self, X_PFN, Y_PFN, particlenet_model):
+        particlenet_model.eval()
+        
+        X_PFN = torch.tensor(X_PFN, dtype=torch.float32).to(self.torch_device)
+        y_PFN = energyflow.utils.to_categorical(Y_PFN, num_classes=2) # Convert to one-hot encoding (y_PFN.shape = (njets, 2)) to calculate the AUC. This needs to remain as a numpy array in the cpu
+
+        points = X_PFN[:, :, 1:3] 
+
+        correct = 0
+        out = particlenet_model(pf_points = points, pf_features = X_PFN, 
+                                pf_mask = torch.ones(X_PFN.shape),
+                                sv_points =  torch.zeros(points.shape), 
+                                sv_features = torch.zeros(X_PFN.shape), 
+                                sv_mask = torch.ones(X_PFN.shape)) 
+        
+        out_softmax = torch.nn.functional.softmax(out, dim=1).cpu().detach().numpy()  # Convert to numpy array in the cpu to calculate the AUC
+        
+        auc_particlenet = sklearn.metrics.roc_auc_score(y_PFN[:,1], out_softmax[:,1]) # Calculate the AUC
+        
+        Y_PFN = torch.tensor(Y_PFN, dtype=torch.float32).to(self.torch_device)        # Convert to tensor and move to GPU to compare with the output of the network for the accuracy 
+        pred = out.argmax(dim=1)                                                      # Use the class with highest probability.
+        correct += int((pred == Y_PFN).sum())                                         # Check against ground-truth labels.
+
+        return (auc_particlenet, correct / len(Y_PFN))                                # Derive ratio of correct predictions.
+
+
+    #---------------------------------------------------------------
     # Fit ML model -- Deep Set/Particle Flow Networks
     #---------------------------------------------------------------
     def fit_pfn(self, model, model_settings):
@@ -1271,6 +1509,10 @@ class AnalyzeQG(common_base.CommonBase):
         start_time = time.time()
     
         # Load the four-vectors directly from the quark vs gluon data set
+        self.n_total = 13000
+        self.n_val = 1000
+        self.n_test = 1000
+
         X_PFN, y_PFN = energyflow.datasets.qg_jets.load(num_data=self.n_total, pad=True, 
                                                      generator='pythia',  # Herwig is also available
                                                      with_bc=False        # Turn on to enable heavy quarks
@@ -1300,7 +1542,7 @@ class AnalyzeQG(common_base.CommonBase):
                                                                                              val=self.n_val, test=self.n_test)
         
         # Herwig
-        if self.Herwig_dataset == 'True':
+        if self.Herwig_dataset:
 
             X_PFN_herwig, y_PFN_herwig = energyflow.datasets.qg_jets.load(num_data=self.n_test + self.n_val, pad=True, 
                                                      generator='herwig',  # Herwig is also available
@@ -1326,7 +1568,7 @@ class AnalyzeQG(common_base.CommonBase):
         # Early Stopping
         early_stopping = keras.callbacks.EarlyStopping(monitor='val_acc', patience=5, restore_best_weights=True)
         # Train model
-        if self.Herwig_dataset == 'False':
+        if not self.Herwig_dataset:
             history = pfn.fit(X_PFN_train,
                           Y_PFN_train,
                           epochs=model_settings['epochs'],
@@ -1350,7 +1592,7 @@ class AnalyzeQG(common_base.CommonBase):
         
             self.roc_curve_dict[model] = sklearn.metrics.roc_curve(Y_PFN_test[:,1], preds_PFN[:,1])
 
-        elif self.Herwig_dataset == 'True':
+        elif self.Herwig_dataset:
             history = pfn.fit(X_PFN_train,
                           Y_PFN_train,
                           epochs=model_settings['epochs'],
