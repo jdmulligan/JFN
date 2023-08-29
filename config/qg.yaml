@@ -62,8 +62,8 @@ g_label: 'gluon'                                    # label 0
 # The K-body phase space is (3K-4)-dimensional
 K: [2,4]
 
-# Select model: pfn, sub_pfn, efn, sub_efn, particle_gnn, sub_dnn, laman_dnn, nsub_dnn, nsub_linear, particle_net
-models: [pfn]
+# Select model: pfn, sub_pfn, efn, particle_gnn, sub_dnn, laman_dnn, nsub_dnn, nsub_linear, particle_net, pfn_pytorch 
+models: [particle_net]
 
 pfn:
 

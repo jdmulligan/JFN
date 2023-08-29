@@ -50,6 +50,8 @@ sns.set_context('paper', rc={'font.size':18,'axes.titlesize':18,'axes.labelsize'
 # Particle Net Model 
 import ParticleNet
 
+# Pytorch implementation of PFN 
+from PFN_pytorch import ParticleFlowNetwork
 # Base class
 sys.path.append('.')
 from base import common_base
@@ -571,6 +573,8 @@ class AnalyzeQG(common_base.CommonBase):
                     self.fit_pfn(model, model_settings)
                 if model == 'efn':
                     self.fit_efn(model, model_settings)
+            if model == 'pfn_pytorch':
+                self.fit_pfn_pytorch(model, model_settings)
 
             # Particle Net 
             if model == 'particle_net':
@@ -1389,8 +1393,9 @@ class AnalyzeQG(common_base.CommonBase):
         (X_PFN_train, X_PFN_val, X_PFN_test, Y_PFN_train, Y_PFN_val, Y_PFN_test) = energyflow.utils.data_split(X_PFN, Y_PFN,
                                                                                                                val=n_val, test=n_test)
 
-
-        particlenet_model = ParticleNet.ParticleNetTagger(pf_features_dims=3, sv_features_dims=0, num_classes = 2)
+        # Define the model 
+        
+        particlenet_model = ParticleNet.ParticleNet(input_dims = 3, num_classes = 2)
         particlenet_model = particlenet_model.to(self.torch_device)
         
         print(f"torch.cuda.is_available = {torch.cuda.is_available()}")
@@ -1401,16 +1406,19 @@ class AnalyzeQG(common_base.CommonBase):
         # Now train particle net
         learning_rate = 0.001
         #optimizer = torch.optim.Adam(particlenet_model.parameters(), lr = learning_rate)
-        optimizer = torch.optim.SGD(particlenet_model.parameters(), lr = learning_rate, momentum = 0.9)
+        optimizer = torch.optim.SGD(particlenet_model.parameters(), lr = learning_rate, momentum = 0.8) # SGD seems to work better than Adam 
         criterion = torch.nn.CrossEntropyLoss()
 
         # For debugging in case of a gradient computation error
         torch.autograd.set_detect_anomaly(True)
 
-        # Train the model with a batch size of 256
+        # Train the model with a specific batch size 
         batch_size = 128
-          
-        for epoch in range(1, 30): # -> 171
+        epochs = 10
+
+        # How long it takes to train the model for one epoch
+        time_start = time.time()
+        for epoch in range(0, epochs): # -> 171
             print("--------------------------------")
             indices = torch.randperm(len(X_PFN_train))
             X_PFN_train_shuffled = X_PFN_train[indices]
@@ -1425,9 +1433,12 @@ class AnalyzeQG(common_base.CommonBase):
             
             auc_train, train_acc = self.test_particlenet(X_PFN_train, Y_PFN_train, particlenet_model)
             auc_test,  test_acc =  self.test_particlenet(X_PFN_test,  Y_PFN_test,  particlenet_model)
-            print(f'Epoch: {epoch:02d}, Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}, AUC: {auc_test:.4f}')
+            print(f'Epoch: {epoch+1:02d}, Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}, AUC: {auc_test:.4f}')
             torch.cuda.empty_cache()
 
+        time_end = time.time()
+        print()
+        print(f"Time to train model for 1 epoch = {(time_end - time_start)/epochs} seconds")
         # For debugging. Ignore for now 
 
         #for epoch in range(1, 150): # -> 171
@@ -1459,9 +1470,9 @@ class AnalyzeQG(common_base.CommonBase):
         points = X_PFN[:, :, 1:3]     # the eta-phi points of the particles to use as the points for the k-NN algorithm
         loss_cum = 0
 
-        # The prediction is the output of the network
-        out = particlenet_model(pf_points = points, pf_features = X_PFN, pf_mask = torch.ones(X_PFN.shape), sv_points =  torch.zeros(points.shape), sv_features = torch.zeros(X_PFN.shape), sv_mask = torch.ones(X_PFN.shape)) 
-        
+        # The prediction is the output of the network\
+        out = particlenet_model(points = points, features = X_PFN, mask = None) 
+
         Y_PFN = energyflow.utils.to_categorical(Y_PFN, num_classes=2)           # Convert to one-hot encoding to calculate the loss
         Y_PFN = torch.tensor(Y_PFN, dtype=torch.float32).to(self.torch_device)  # Convert to tensor and move to GPU
         
@@ -1483,11 +1494,130 @@ class AnalyzeQG(common_base.CommonBase):
         points = X_PFN[:, :, 1:3] 
 
         correct = 0
-        out = particlenet_model(pf_points = points, pf_features = X_PFN, 
-                                pf_mask = torch.ones(X_PFN.shape),
-                                sv_points =  torch.zeros(points.shape), 
-                                sv_features = torch.zeros(X_PFN.shape), 
-                                sv_mask = torch.ones(X_PFN.shape)) 
+        out = particlenet_model(points = points, features = X_PFN, mask = None) 
+        
+        out_softmax = torch.nn.functional.softmax(out, dim=1).cpu().detach().numpy()  # Convert to numpy array in the cpu to calculate the AUC
+        
+        auc_particlenet = sklearn.metrics.roc_auc_score(y_PFN[:,1], out_softmax[:,1]) # Calculate the AUC
+        
+        Y_PFN = torch.tensor(Y_PFN, dtype=torch.float32).to(self.torch_device)        # Convert to tensor and move to GPU to compare with the output of the network for the accuracy 
+        pred = out.argmax(dim=1)                                                      # Use the class with highest probability.
+        correct += int((pred == Y_PFN).sum())                                         # Check against ground-truth labels.
+
+        return (auc_particlenet, correct / len(Y_PFN))                                # Derive ratio of correct predictions.
+
+    #---------------------------------------------------------------
+    # Fit ML model -- PFN Pytorch Implementation 
+    #---------------------------------------------------------------
+    def fit_pfn_pytorch(self, model, model_settings):
+        print()
+        print('fit_pfn_pytorch...')
+
+        # Manually set the data size for now
+        # TODO: Move this to the model settings
+        n_total = 40000
+        n_val = 5000   
+        n_test = 5000
+
+        # Load the four-vectors directly from the quark vs gluon data set
+        X_PFN, Y_PFN = energyflow.datasets.qg_jets.load(num_data=n_total, pad=True, 
+                                                        generator='pythia',  # Herwig is also available
+                                                        with_bc=False        # Turn on to enable heavy quarks
+                                                       )                     # X_PFN.shape = (n_jets, n_particles per jet, n_variables)  
+               
+        print(f'(n_jets, n_particles per jet, n_variables): {X_PFN.shape}')
+
+        # Preprocess by centering jets and normalizing pts
+        for x_PFN in X_PFN:
+            mask = x_PFN[:,0] > 0
+            yphi_avg = np.average(x_PFN[mask,1:3], weights=x_PFN[mask,0], axis=0)
+            x_PFN[mask,1:3] -= yphi_avg
+            x_PFN[mask,0] /= x_PFN[:,0].sum()
+
+        X_PFN = X_PFN[:,:,:3]
+        
+        # Split data into train, val and test sets
+        (X_PFN_train, X_PFN_val, X_PFN_test, Y_PFN_train, Y_PFN_val, Y_PFN_test) = energyflow.utils.data_split(X_PFN, Y_PFN,
+                                                                                                               val=n_val, test=n_test)
+
+        # Define the model and move it to the GPU if available
+        pfnpyt_model = ParticleFlowNetwork(input_dims = 3, num_classes = 2)
+        pfnpyt_model = pfnpyt_model.to(self.torch_device)
+        
+        print(f"torch.cuda.is_available = {torch.cuda.is_available()}")
+        print()
+        print(f"particle_net model: {pfnpyt_model}")
+        print()
+
+        # Now train particle net
+        learning_rate = 0.001
+        optimizer = torch.optim.Adam(pfnpyt_model.parameters(), lr = learning_rate)
+        #optimizer = torch.optim.SGD(pfnpyt_model.parameters(), lr = learning_rate, momentum = 0.8)
+        criterion = torch.nn.CrossEntropyLoss()
+
+        # For debugging in case of a gradient computation error
+        torch.autograd.set_detect_anomaly(True)
+
+        # Train the model with a batch size of 256
+        batch_size = 256
+        epochs = 10
+
+        # How long it takes to train the model for one epoch
+        time_start = time.time()
+
+        for epoch in range(0, epochs): # -> 171
+            print("--------------------------------")
+            indices = torch.randperm(len(X_PFN_train))
+            X_PFN_train_shuffled = X_PFN_train[indices]
+            Y_PFN_train_shuffled = Y_PFN_train[indices]
+
+            for batch_start in range(0, len(X_PFN_train), batch_size):
+                # Get the current batch
+                batch_end = min(batch_start + batch_size, len(X_PFN_train))
+                inputs_batch = X_PFN_train_shuffled[batch_start:batch_end]
+                labels_batch = Y_PFN_train_shuffled[batch_start:batch_end]
+                self.train_pfnpyt(inputs_batch, labels_batch, pfnpyt_model, optimizer, criterion)
+            
+            auc_train, train_acc = self.test_pfnpyt(X_PFN_train, Y_PFN_train, pfnpyt_model)
+            auc_test,  test_acc =  self.test_pfnpyt(X_PFN_test,  Y_PFN_test,  pfnpyt_model)
+            print(f'Epoch: {epoch+1:02d}, Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}, AUC: {auc_test:.4f}')
+            torch.cuda.empty_cache()
+
+        time_end = time.time()
+        print()
+        print(f"Time to train model for 1 epoch = {(time_end - time_start)/epochs} seconds")
+
+    #---------------------------------------------------------------
+    def train_pfnpyt(self, X_PFN, Y_PFN, pfnpyt_model, optimizer, criterion):
+        pfnpyt_model.train()
+
+        X_PFN = torch.tensor(X_PFN, dtype=torch.float32).to(self.torch_device)
+
+        loss_cum = 0
+
+        # The prediction is the output of the network
+        out = pfnpyt_model(features = X_PFN) 
+
+        Y_PFN = energyflow.utils.to_categorical(Y_PFN, num_classes=2)           # Convert to one-hot encoding to calculate the loss
+        Y_PFN = torch.tensor(Y_PFN, dtype=torch.float32).to(self.torch_device)  # Convert to tensor and move to GPU
+        
+        loss = criterion(out, Y_PFN)  # Compute the loss.
+        loss_cum += loss.item()       # Cumulative loss
+        loss.backward()               # Derive gradients.
+        optimizer.step()              # Update parameters based on gradients.
+        optimizer.zero_grad()         # Clear gradients.
+
+        return loss_cum/len(X_PFN)
+
+    #---------------------------------------------------------------
+    def test_pfnpyt(self, X_PFN, Y_PFN, pfnpyt_model):
+        pfnpyt_model.eval()
+        
+        X_PFN = torch.tensor(X_PFN, dtype=torch.float32).to(self.torch_device)
+        y_PFN = energyflow.utils.to_categorical(Y_PFN, num_classes=2) # Convert to one-hot encoding (y_PFN.shape = (njets, 2)) to calculate the AUC. This needs to remain as a numpy array in the cpu
+
+        correct = 0
+        out = pfnpyt_model(features = X_PFN) 
         
         out_softmax = torch.nn.functional.softmax(out, dim=1).cpu().detach().numpy()  # Convert to numpy array in the cpu to calculate the AUC
         
@@ -1509,9 +1639,10 @@ class AnalyzeQG(common_base.CommonBase):
         start_time = time.time()
     
         # Load the four-vectors directly from the quark vs gluon data set
-        self.n_total = 13000
-        self.n_val = 1000
-        self.n_test = 1000
+        # This is here just to compare with the ParticleNet results that have a maximum data size of 15k jets 
+        self.n_total = 80000
+        self.n_val = 10000
+        self.n_test = 10000
 
         X_PFN, y_PFN = energyflow.datasets.qg_jets.load(num_data=self.n_total, pad=True, 
                                                      generator='pythia',  # Herwig is also available
@@ -1566,16 +1697,18 @@ class AnalyzeQG(common_base.CommonBase):
                                    F_sizes=model_settings['F_sizes'])
     
         # Early Stopping
-        early_stopping = keras.callbacks.EarlyStopping(monitor='val_acc', patience=5, restore_best_weights=True)
+        early_stopping = keras.callbacks.EarlyStopping(monitor='val_acc', patience=10, restore_best_weights=True)
         # Train model
         if not self.Herwig_dataset:
+            # How long to train for one epoch
+            start_time = time.time()
             history = pfn.fit(X_PFN_train,
                           Y_PFN_train,
                           epochs=model_settings['epochs'],
                           batch_size=model_settings['batch_size'],
                           validation_data=(X_PFN_val, Y_PFN_val),
                           verbose=1, callbacks =[early_stopping])
-            
+            end_time = time.time()
             history_epochs = len(history.history['loss']) # For the x axis of the plot    
             self.epochs[f'{model}']= history_epochs  
 
@@ -1588,6 +1721,7 @@ class AnalyzeQG(common_base.CommonBase):
             # Get AUC and ROC curve + make plot
             auc_PFN = sklearn.metrics.roc_auc_score(Y_PFN_test[:,1], preds_PFN[:,1])
             print('Particle Flow Networks/Deep Sets: AUC = {} (test set)'.format(auc_PFN))
+            print(f"Time to train PFN for 1 epoch: {(end_time - start_time)/model_settings['epochs']} seconds")
             self.AUC[f'{model}'].append(auc_PFN)
         
             self.roc_curve_dict[model] = sklearn.metrics.roc_curve(Y_PFN_test[:,1], preds_PFN[:,1])

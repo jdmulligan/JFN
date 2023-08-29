@@ -1,3 +1,8 @@
+''' 
+This file contains the ParticleNet model. This is taken (and modified) from the implementation in https://github.com/hqucms/weaver-core/blob/main/weaver/nn/model/ParticleNet.py
+'''
+
+
 ''' ParticleNet
 
 Paper: "ParticleNet: Jet Tagging via Particle Clouds" - https://arxiv.org/abs/1902.08570
@@ -7,6 +12,7 @@ Adapted from the DGCNN implementation in https://github.com/WangYueFt/dgcnn/blob
 import numpy as np
 import torch
 import torch.nn as nn
+import time 
 
 # Find the k nearest neighbors for each point. For the first layer we use the (η,φ) coordinates of the particles as input. For the next layers we use the output of the previous layer. 
 def knn(x, k): # x: (batch_size, num_dims, num_points)
@@ -136,7 +142,7 @@ class ParticleNet(nn.Module):
     def __init__(self,
                  input_dims,
                  num_classes,
-                 conv_params=[(7, (32, 32, 32)), (7, (64, 64, 64))], # Two EdgeConv layers with 7 neighbors each and 32, 32, 32 and 64, 64, 64 output channels respectively
+                 conv_params=[(7, (32, 32, 32)), (7, (64, 64, 64))], # Two EdgeConv layers with 7 neighbors each and (32, 32, 32) and (64, 64, 64) output channels respectively
                  fc_params=[(128, 0.1)],                             # One fully connected layer with 128 output channels and a dropout rate of 0.1
                  use_fusion=True,                                    
                  use_fts_bn=True,
@@ -189,9 +195,16 @@ class ParticleNet(nn.Module):
 
     def forward(self, points, features, mask=None):
         # If we have not defined a particular mask, the default one is: Mask all points that have a zero feature vector (in case of padding the input) 
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # The ParticleNet code wants the inputs to have the shape (njets, nfeatures, nparticles) but our convention is the shape (njets, nparticles, nfeatures)
+        points = points.transpose(1, 2).to(device) 
+        features = features.transpose(1, 2).to(device) 
+
         if mask is None:
             mask = (features.abs().sum(dim=1, keepdim=True) != 0)  # (njets, 1, hadrons) 
-        
+            
         points *= mask
         features *= mask
 
@@ -236,7 +249,7 @@ class ParticleNet(nn.Module):
 
         return output
 
-# Used to convolve the input features to another dimension before passing it to the ParticleNet
+# Used to convolve the input features to ParticleNetTagger to another dimension before passing it to the ParticleNet. See the class ParticleNetTagger below.
 class FeatureConv(nn.Module):
 
     def __init__(self, in_chn, out_chn, **kwargs):
@@ -251,7 +264,9 @@ class FeatureConv(nn.Module):
     def forward(self, x):
         return self.conv(x)
 
-
+# This is only useful if you want to add extra information related to the vertices. This is NOT discussed in the ParticleNet paper, but its probably used at the LHC (?).
+# For our purposes, we can ignore this. Directly use the ParticleNet class above.   
+# This is NOT the original ParticleNetTagger implementation, since I was playing around with it. For the original implementation, see the ParticleNet github repo.
 class ParticleNetTagger(nn.Module):
 
     def __init__(self,
@@ -274,6 +289,7 @@ class ParticleNetTagger(nn.Module):
         self.sv_input_dropout = nn.Dropout(sv_input_dropout) if sv_input_dropout else None
         self.pf_conv = FeatureConv(pf_features_dims, 32)
         self.sv_conv = FeatureConv(sv_features_dims, 32)
+        
         # Call ParticleNet 
         self.pn = ParticleNet(input_dims=3, # if we use the self.pv_conv this is the output dimension of self.pv_conv. For now we feed the input directly to ParticleNet without convolving it to another dim 
                               num_classes=num_classes,
